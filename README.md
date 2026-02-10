@@ -1,4 +1,4 @@
-# Magnet P2P File Transfer System
+# Magnetk File Transfer System
 
 A peer-to-peer file transfer network using **libp2p + QUIC** with automatic resume capability, relay-assisted delivery, and multiple SDKs.
 

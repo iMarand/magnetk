@@ -1,10 +1,10 @@
-# Magnet P2P Network - Architecture
+# Magnetk P2P Network - Architecture
 
 ## System Overview
 
-**Magnet** is a hybrid P2P file transfer network with three node types:
+**Magnetk** is a hybrid P2P file transfer network with three node types:
 - **Relay Nodes** (your infrastructure) - Network backbone
-- **Seed Nodes** (third-party VPS) - File hosts using Magnet SDK
+- **Seed Nodes** (third-party VPS) - File hosts using Magnetk SDK
 - **Peer Clients** (end users) - Download files via magnet links
 
 ---
@@ -61,7 +61,7 @@ graph TB
 │                   APPLICATION LAYER                          │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Magnet SDK  │  │ Magnet Link  │  │    Chunk     │      │
+│  │  Magnetk SDK │  │ Magnet Link  │  │    Chunk     │      │
 │  │   (Go/Py/JS) │  │   Parser     │  │   Manager    │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 ├─────────────────────────────────────────────────────────────┤
@@ -159,9 +159,9 @@ magnet:?xt=urn:sha256:<HASH>&dn=<NAME>&xs=<SEED_ID>&relay=<RELAY>
 
 | SDK | Language | Use Case |
 |-----|----------|----------|
-| `magnet-sdk-go` | Go | High-performance seeds, CLI tools |
-| `magnet-sdk-py` | Python | Scripts, automation, backend |
-| `magnet-sdk-js` | JavaScript | Browser downloads, Node.js servers |
+| `magnetk-sdk-go` | Go | High-performance seeds, CLI tools |
+| `magnetk-sdk-py` | Python | Scripts, automation, backend |
+| `magnetk-sdk-js` | JavaScript | Browser downloads, Node.js servers |
 
 ---
 

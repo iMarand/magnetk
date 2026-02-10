@@ -1,6 +1,6 @@
-# Magnet SDK Guide
+# Magnetk SDK Guide
 
-This guide explains how to use the Magnet P2P SDKs for Go, JavaScript (Node.js), and C++.
+This guide explains how to use the Magnetk P2P SDKs for Go, JavaScript (Node.js), and C++.
 
 ## 1. Go SDK
 
@@ -22,7 +22,7 @@ import (
 
 func main() {
     // Initialize seed node
-    seed, err := magnet.NewSeed(magnet.SeedConfig{
+    seed, err := magnetk.NewSeed(magnetk.SeedConfig{
         RelayAddr:     "/ip4/127.0.0.1/tcp/4001/p2p/<relay_id>",
         TransportPort: 4002,
     })
@@ -48,8 +48,8 @@ func main() {
 ```go
 import "github.com/iMarand/magnetk/sdk/go/magnet"
 
-client, _ := magnet.NewClient(magnet.ClientConfig{})
-err := client.Download(magnetLink, "./downloads/", func(p magnet.Progress) {
+client, _ := magnetk.NewClient(magnetk.ClientConfig{})
+err := client.Download(magnetLink, "./downloads/", func(p magnetk.Progress) {
     fmt.Printf("Progress: %.1f%%\n", p.Percent)
 })
 ```
@@ -58,7 +58,7 @@ err := client.Download(magnetLink, "./downloads/", func(p magnet.Progress) {
 
 ## 2. JavaScript SDK (Node.js)
 
-The JS SDK supports connecting to the Magnet network using TCP. It implements the binary framing protocol but relies on seeds supporting TCP fallback or a proxy for data transfer (MsQuic binding coming soon).
+The JS SDK supports connecting to the Magnetk network using TCP. It implements the binary framing protocol but relies on seeds supporting TCP fallback or a proxy for data transfer (MsQuic binding coming soon).
 
 ### Installation
 ```bash
@@ -68,9 +68,9 @@ npm install
 
 ### Usage
 ```javascript
-import { MagnetClient, MagnetLink } from 'magnet-sdk-js';
+import { MagnetkClient, MagnetkLink } from 'magnetk-sdk-js';
 
-const client = new MagnetClient();
+const client = new MagnetkClient();
 
 // Connect and download (metadata only for now without C++ bindings)
 await client.download('magnet:?xt=urn:sha256:...', './output');
@@ -91,15 +91,15 @@ make
 
 ### Usage
 ```cpp
-#include "magnet.hpp"
+#include "magnetk.hpp"
 
 int main() {
-    magnet::Client client;
+    magnetk::Client client;
     
     client.download(
         "magnet:?xt=urn:sha256:...", 
         "./output.dat",
-        [](const magnet::Progress& p) {
+        [](const magnetk::Progress& p) {
             std::cout << p.percent << "%" << std::endl;
         }
     );
@@ -110,7 +110,7 @@ int main() {
 
 ## Protocol Overview
 
-All SDKs speak the **Magnet Binary Framing Protocol**:
+All SDKs speak the **Magnetk Binary Framing Protocol**:
 
 - **Header**: 4 bytes Length + 1 byte Type
 - **Control Messages** (Manifest, Handshake): JSON payload

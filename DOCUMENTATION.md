@@ -1,4 +1,4 @@
-# Magnet P2P Documentation
+# Magnetk Documentation
 
 ## 1. Installation & Build
 
@@ -49,8 +49,8 @@ import "github.com/iMarand/magnetk/sdk/go/magnet"
 
 **Usage**:
 ```go
-cfg := magnet.DefaultConfig()
-client, err := magnet.NewClient(cfg)
+cfg := magnetk.DefaultConfig()
+client, err := magnetk.NewClient(cfg)
 if err != nil {
     log.Fatal(err)
 }
@@ -70,9 +70,9 @@ npm install
 
 **Usage**:
 ```javascript
-import { MagnetClient } from './client.js';
+import { MagnetkClient } from './client.js';
 
-const client = new MagnetClient();
+const client = new MagnetkClient();
 await client.download('magnet:?xt=urn:sha256:...', './downloads');
 ```
 
@@ -89,10 +89,10 @@ make
 
 **Usage**:
 ```cpp
-#include "magnet_sdk.h"
+#include "magnetk_sdk.h"
 
-magnet_client_t* client = magnet_client_init();
-magnet_client_download(client, "magnet:?xt=...", "./out.dat");
+magnetk_client_t* client = magnetk_client_init();
+magnetk_client_download(client, "magnet:?xt=...", "./out.dat");
 ```
 
 ---
@@ -100,13 +100,13 @@ magnet_client_download(client, "magnet:?xt=...", "./out.dat");
 ## 3. Performance & Architecture
 
 ### Faster File Transfers
-Magnet P2P is faster than traditional HTTP for large files because:
+Magnetk P2P is faster than traditional HTTP for large files because:
 1.  **QUIC Transport**: Uses UDP to avoid Head-of-Line blocking.
 2.  **Parallel Chunking**: Downloads multiple chunks simultaneously from different peers.
 3.  **Relay Buffering**: The relay caches chunks for offline peers, smoothing out speed variations.
 
 ### Comparison
-| Feature | Magnet P2P | Classic HTTP | BitTorrent |
+| Feature | Magnetk P2P | Classic HTTP | BitTorrent |
 | :--- | :--- | :--- | :--- |
 | Transport | QUIC (UDP) | TCP | TCP/UDP |
 | Latency | Low (0-RTT) | Medium | High |
