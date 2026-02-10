@@ -1,0 +1,41 @@
+# Binaries
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Logs
+*.log
+*.out
+
+# State and Data
+transfer_states/
+test_data.bin
+test_cgo.go
+
+# Node.js
+node_modules/
+npm-debug.log
+
+# C/C++ Build Artifacts
+c/build/
+sdk/cpp/build/
+*.o
+*.obj
+*.lib
+*.a
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# TLS Keys (Security)
+*.pem
+*.key
+*.crt
+
+# MsQuic artifacts (if built locally and not tracked)
+msquic/
