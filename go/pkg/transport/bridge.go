@@ -6,7 +6,7 @@
 package transport
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../c/include -I${SRCDIR}/../../../msquic/src/inc -DMAGNET_STATIC
+#cgo CFLAGS: -I${SRCDIR}/../../../c/include -I${SRCDIR}/../../../msquic/src/inc -DMAGNETK_STATIC
 #cgo windows LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/windows/x64_Debug_schannel -lmsquic -lws2_32
 #cgo linux LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/linux/x64_Debug_openssl -lmsquic -lpthread
 #cgo darwin LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/macos/x64_Debug_openssl -lmsquic -lpthread
@@ -41,35 +41,35 @@ var (
 	ErrNotReady     = errors.New("transport: not ready")
 )
 
-func statusToError(status C.magnet_status_t) error {
+func statusToError(status C.magnetk_status_t) error {
 	switch status {
-	case C.MAGNET_OK:
+	case C.MAGNETK_OK:
 		return nil
-	case C.MAGNET_ERR_INIT:
+	case C.MAGNETK_ERR_INIT:
 		return ErrInit
-	case C.MAGNET_ERR_CONFIG:
+	case C.MAGNETK_ERR_CONFIG:
 		return ErrConfig
-	case C.MAGNET_ERR_LISTEN:
+	case C.MAGNETK_ERR_LISTEN:
 		return ErrListen
-	case C.MAGNET_ERR_CONNECT:
+	case C.MAGNETK_ERR_CONNECT:
 		return ErrConnect
-	case C.MAGNET_ERR_SEND:
+	case C.MAGNETK_ERR_SEND:
 		return ErrSend
-	case C.MAGNET_ERR_RECV:
+	case C.MAGNETK_ERR_RECV:
 		return ErrRecv
-	case C.MAGNET_ERR_TIMEOUT:
+	case C.MAGNETK_ERR_TIMEOUT:
 		return ErrTimeout
-	case C.MAGNET_ERR_CLOSED:
+	case C.MAGNETK_ERR_CLOSED:
 		return ErrClosed
-	case C.MAGNET_ERR_TLS:
+	case C.MAGNETK_ERR_TLS:
 		return ErrTLS
-	case C.MAGNET_ERR_MEMORY:
+	case C.MAGNETK_ERR_MEMORY:
 		return ErrMemory
-	case C.MAGNET_ERR_INVALID_PARAM:
+	case C.MAGNETK_ERR_INVALID_PARAM:
 		return ErrInvalidParam
-	case C.MAGNET_ERR_STREAM:
+	case C.MAGNETK_ERR_STREAM:
 		return ErrStream
-	case C.MAGNET_ERR_NOT_READY:
+	case C.MAGNETK_ERR_NOT_READY:
 		return ErrNotReady
 	default:
 		return fmt.Errorf("transport: unknown error %d", status)
@@ -98,7 +98,7 @@ func DefaultConfig() Config {
 		BindAddress:       "0.0.0.0",
 		Port:              4002,
 		NoCertValidation:  true,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    1000,
 		IdleTimeoutMs:     30000,
 		SendBufferSize:    4 * 1024 * 1024,
@@ -110,15 +110,15 @@ func DefaultConfig() Config {
 
 // Transport wraps the C MsQuic transport layer.
 type Transport struct {
-	handle *C.magnet_transport_t
+	handle *C.magnetk_transport_t
 	mu     sync.Mutex
 	closed bool
 }
 
 // NewTransport creates and initializes a new MsQuic transport.
 func NewTransport(cfg Config) (*Transport, error) {
-	var cConfig C.magnet_config_t
-	C.magnet_config_default(&cConfig)
+	var cConfig C.magnetk_config_t
+	C.magnetk_config_default(&cConfig)
 
 	// Set string fields
 	cBind := C.CString(cfg.BindAddress)
@@ -159,8 +159,8 @@ func NewTransport(cfg Config) (*Transport, error) {
 		cConfig.execution_profile = 0
 	}
 
-	var cTransport *C.magnet_transport_t
-	status := C.magnet_transport_init(&cConfig, &cTransport)
+	var cTransport *C.magnetk_transport_t
+	status := C.magnetk_transport_init(&cConfig, &cTransport)
 	if err := statusToError(status); err != nil {
 		return nil, err
 	}
@@ -176,12 +176,12 @@ func (t *Transport) Close() {
 		return
 	}
 	t.closed = true
-	C.magnet_transport_shutdown(t.handle)
+	C.magnetk_transport_shutdown(t.handle)
 }
 
 // Connection wraps a QUIC connection.
 type Connection struct {
-	handle    *C.magnet_connection_t
+	handle    *C.magnetk_connection_t
 	transport *Transport
 	mu        sync.Mutex
 	closed    bool
@@ -200,8 +200,8 @@ func (t *Transport) Connect(host string, port uint16) (*Connection, error) {
 	cHost := C.CString(host)
 	defer C.free(unsafe.Pointer(cHost))
 
-	var cConn *C.magnet_connection_t
-	status := C.magnet_connect(
+	var cConn *C.magnetk_connection_t
+	status := C.magnetk_connect(
 		t.handle,
 		cHost,
 		C.uint16_t(port),
@@ -225,12 +225,12 @@ func (c *Connection) Close() {
 		return
 	}
 	c.closed = true
-	C.magnet_connection_close(c.handle)
+	C.magnetk_connection_close(c.handle)
 }
 
 // Stream wraps a QUIC stream with io.Reader/io.Writer interfaces.
 type Stream struct {
-	handle *C.magnet_stream_t
+	handle *C.magnetk_stream_t
 	conn   *Connection
 	mu     sync.Mutex
 	closed bool
@@ -245,8 +245,8 @@ func (c *Connection) OpenStream() (*Stream, error) {
 	}
 	c.mu.Unlock()
 
-	var cStream *C.magnet_stream_t
-	status := C.magnet_stream_open(
+	var cStream *C.magnetk_stream_t
+	status := C.magnetk_stream_open(
 		c.handle,
 		nil, nil, nil, nil,
 		&cStream)
@@ -273,7 +273,7 @@ func (s *Stream) Write(data []byte) (int, error) {
 	}
 	s.mu.Unlock()
 
-	status := C.magnet_stream_send_sync(
+	status := C.magnetk_stream_send_sync(
 		s.handle,
 		(*C.uint8_t)(unsafe.Pointer(&data[0])),
 		C.uint32_t(len(data)),
@@ -299,7 +299,7 @@ func (s *Stream) WriteFin(data []byte) (int, error) {
 		dataPtr = (*C.uint8_t)(unsafe.Pointer(&data[0]))
 	}
 
-	status := C.magnet_stream_send_sync(
+	status := C.magnetk_stream_send_sync(
 		s.handle,
 		dataPtr,
 		C.uint32_t(len(data)),
@@ -327,7 +327,7 @@ func (s *Stream) Read(buf []byte) (int, error) {
 	var outLen C.uint32_t
 	var outFin C.int
 
-	status := C.magnet_stream_recv_sync(
+	status := C.magnetk_stream_recv_sync(
 		s.handle,
 		(*C.uint8_t)(unsafe.Pointer(&buf[0])),
 		C.uint32_t(len(buf)),
@@ -336,7 +336,7 @@ func (s *Stream) Read(buf []byte) (int, error) {
 		30000, // 30s timeout
 	)
 
-	if status == C.MAGNET_ERR_CLOSED {
+	if status == C.MAGNETK_ERR_CLOSED {
 		return 0, fmt.Errorf("stream closed (EOF)")
 	}
 	if err := statusToError(status); err != nil {
@@ -361,7 +361,7 @@ func (s *Stream) ReadFull(buf []byte) error {
 
 // ShutdownSend gracefully closes the send direction.
 func (s *Stream) ShutdownSend() error {
-	return statusToError(C.magnet_stream_shutdown_send(s.handle))
+	return statusToError(C.magnetk_stream_shutdown_send(s.handle))
 }
 
 // Close aborts the stream in both directions.
@@ -372,5 +372,5 @@ func (s *Stream) Close() {
 		return
 	}
 	s.closed = true
-	C.magnet_stream_close(s.handle)
+	C.magnetk_stream_close(s.handle)
 }

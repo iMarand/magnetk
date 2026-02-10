@@ -30,7 +30,7 @@ type DataHandler func(data []byte, fin bool)
 
 // Listener accepts incoming QUIC connections on the transport.
 type Listener struct {
-	handle    *C.magnet_listener_t
+	handle    *C.magnetk_listener_t
 	transport *Transport
 	mu        sync.Mutex
 	closed    bool
@@ -58,13 +58,13 @@ func (t *Transport) Listen(onStream StreamHandler) (*Listener, error) {
 	// Store listener reference for CGo callbacks
 	listenerID := registerListener(l)
 
-	var cListener *C.magnet_listener_t
-	status := C.magnet_listen(
+	var cListener *C.magnetk_listener_t
+	status := C.magnetk_listen(
 		t.handle,
-		C.magnet_on_connection_fn(C.goOnConnection),
-		C.magnet_on_stream_fn(C.goOnStream),
-		C.magnet_on_data_fn(C.goOnData),
-		C.magnet_on_close_fn(C.goOnClose),
+		C.magnetk_on_connection_fn(C.goOnConnection),
+		C.magnetk_on_stream_fn(C.goOnStream),
+		C.magnetk_on_data_fn(C.goOnData),
+		C.magnetk_on_close_fn(C.goOnClose),
 		unsafe.Pointer(listenerID),
 		&cListener,
 	)
@@ -85,7 +85,7 @@ func (l *Listener) Close() {
 		return
 	}
 	l.closed = true
-	C.magnet_listener_close(l.handle)
+	C.magnetk_listener_close(l.handle)
 }
 
 // ===== CGo callback registry =====
@@ -131,7 +131,7 @@ func goOnConnection(listener unsafe.Pointer, conn unsafe.Pointer, userData unsaf
 	}
 
 	goConn := &Connection{
-		handle:    (*C.magnet_connection_t)(conn),
+		handle:    (*C.magnetk_connection_t)(conn),
 		transport: l.transport,
 	}
 	l.conns.Store(uintptr(conn), goConn)
@@ -153,7 +153,7 @@ func goOnStream(conn unsafe.Pointer, stream unsafe.Pointer, userData unsafe.Poin
 	goConn := connVal.(*Connection)
 
 	goStream := &Stream{
-		handle: (*C.magnet_stream_t)(stream),
+		handle: (*C.magnetk_stream_t)(stream),
 		conn:   goConn,
 	}
 	l.streams.Store(uintptr(stream), goStream)

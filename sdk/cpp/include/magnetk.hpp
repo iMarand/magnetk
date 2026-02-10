@@ -1,5 +1,5 @@
-#ifndef MAGNET_HPP
-#define MAGNET_HPP
+#ifndef MAGNETK_HPP
+#define MAGNETK_HPP
 
 #include <string>
 #include <vector>
@@ -9,7 +9,7 @@
 
 #include "transport.h"
 
-namespace magnet {
+namespace magnetk {
 
 /**
  * High-Level C++ SDK for Magnet P2P.
@@ -70,7 +70,7 @@ public:
 
 private:
     Config config_;
-    magnet_transport_t* transport_ = nullptr;
+    magnetk_transport_t* transport_ = nullptr;
 };
 
 /* ===== Seed ===== */
@@ -91,10 +91,10 @@ public:
 
 private:
     Config config_;
-    magnet_transport_t* transport_ = nullptr;
+    magnetk_transport_t* transport_ = nullptr;
     magnet_listener_t* listener_ = nullptr;
 };
 
-} // namespace magnet
+} // namespace magnetk
 
-#endif // MAGNET_HPP
+#endif // MAGNETK_HPP

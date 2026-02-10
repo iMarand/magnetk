@@ -1,4 +1,4 @@
-// Relay node for the Magnet P2P network.
+// Relay node for the Magnetk P2P network.
 //
 // The relay acts as the central coordinator:
 // - Discovery: uses libp2p for peer registration and file lookup
@@ -21,11 +21,11 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 
-	"magnet/pkg/buffer"
-	"magnet/pkg/config"
-	"magnet/pkg/handler"
-	"magnet/pkg/registry"
-	"magnet/pkg/transport"
+	"magnetk/pkg/buffer"
+	"magnetk/pkg/config"
+	"magnetk/pkg/handler"
+	"magnetk/pkg/registry"
+	"magnetk/pkg/transport"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
-	fmt.Println("║         MAGNET P2P RELAY NODE                ║")
+	fmt.Println("║         MAGNETK P2P RELAY NODE                ║")
 	fmt.Println("║         Hybrid MsQuic + libp2p              ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
@@ -70,7 +70,7 @@ func main() {
 		CertFile:          cfg.TLSCertFile,
 		KeyFile:           cfg.TLSKeyFile,
 		NoCertValidation:  cfg.NoCertValidation,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    uint32(cfg.MaxConnections),
 		IdleTimeoutMs:     uint32(cfg.PingIntervalSec * 3 * 1000),
 		SendBufferSize:    cfg.SendBufferSizeBytes(),

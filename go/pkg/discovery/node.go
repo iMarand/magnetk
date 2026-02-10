@@ -16,7 +16,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // Node represents a libp2p node in the Magnet network

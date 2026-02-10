@@ -20,7 +20,7 @@ async function run() {
 
     try {
         console.log('Dialing...');
-        const stream = await node.dialProtocol(multiaddr(relayAddr), '/magnet/discovery/1.0.0');
+        const stream = await node.dialProtocol(multiaddr(relayAddr), '/magnetk/discovery/1.0.0');
 
         console.log('Stream object keys:', Object.keys(stream));
         console.log('Stream prototype keys:', Object.keys(Object.getPrototypeOf(stream)));

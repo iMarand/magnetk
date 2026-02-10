@@ -1,8 +1,8 @@
 #!/bin/bash
-# Magnet P2P Build Script for Linux/macOS
+# Magnetk P2P Build Script for Linux/macOS
 
 echo "========================================"
-echo " Magnet P2P File Transfer System"
+echo " Magnetk P2P File Transfer System"
 echo " Build Script"
 echo "========================================"
 echo
@@ -60,5 +60,5 @@ echo
 echo "Usage:"
 echo "  1. Start relay:  ./bin/relay --port 4001"
 echo "  2. Start seed:   ./bin/seed --relay 'relay_addr' --file 'filepath'"
-echo "  3. Download:     ./bin/peer --magnet 'magnet:?...' --output 'outfile'"
+echo "  3. Download:     ./bin/peer --magnetk 'magnetk:?...' --output 'outfile'"
 echo

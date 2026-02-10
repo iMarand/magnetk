@@ -1,8 +1,8 @@
 @echo off
-REM Magnet P2P Build Script for Windows
+REM Magnetk P2P Build Script for Windows
 
 echo ========================================
-echo  Magnet P2P File Transfer System
+echo  Magnetk P2P File Transfer System
 echo  Build Script
 echo ========================================
 echo.
@@ -64,5 +64,5 @@ echo.
 echo Usage:
 echo   1. Start relay:  bin\relay.exe --port 4001
 echo   2. Start seed:   bin\seed.exe --relay "relay_addr" --file "filepath"
-echo   3. Download:     bin\peer.exe --magnet "magnet:?..." --output "outfile"
+echo   3. Download:     bin\peer.exe --magnetk "magnetk:?..." --output "outfile"
 echo.

@@ -82,7 +82,7 @@ func DefaultConfig() *Config {
 		StateDir:                "./transfer_states",
 		StateExpiryDays:         7,
 		LogLevel:                "info",
-		LogFile:                 "./magnet.log",
+		LogFile:                 "./magnetk.log",
 		EnableTrafficRouting:    true,
 		EnableAnalytics:         true,
 	}

@@ -13,11 +13,11 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	"magnet/pkg/buffer"
-	"magnet/pkg/chunk"
-	"magnet/pkg/protocol"
-	"magnet/pkg/registry"
-	"magnet/pkg/types"
+	"magnetk/pkg/buffer"
+	"magnetk/pkg/chunk"
+	"magnetk/pkg/protocol"
+	"magnetk/pkg/registry"
+	"magnetk/pkg/types"
 )
 
 // RelayHandler handles protocol messages for the relay node

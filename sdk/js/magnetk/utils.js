@@ -1,4 +1,4 @@
-export class MagnetLink {
+export class MagnetkLink {
     constructor(fileHash, fileName, relayAddr = '', seedID = '') {
         this.fileHash = fileHash;
         this.fileName = fileName;
@@ -7,7 +7,7 @@ export class MagnetLink {
     }
 
     toString() {
-        let link = `magnet:?xt=urn:sha256:${this.fileHash}&dn=${encodeURIComponent(this.fileName)}`;
+        let link = `magnetk:?xt=urn:sha256:${this.fileHash}&dn=${encodeURIComponent(this.fileName)}`;
         if (this.relayAddr) {
             link += `&relay=${encodeURIComponent(this.relayAddr)}`;
         }
@@ -18,11 +18,11 @@ export class MagnetLink {
     }
 
     static parse(linkStr) {
-        if (!linkStr.startsWith('magnet:?')) {
-            throw new Error('Invalid magnet link: must start with magnet:?');
+        if (!linkStr.startsWith('magnetk:?')) {
+            throw new Error('Invalid magnet link: must start with magnetk:?');
         }
 
-        const params = new URLSearchParams(linkStr.substring(8));
+        const params = new URLSearchParams(linkStr.substring(9));
         const xt = params.get('xt');
         if (!xt || !xt.startsWith('urn:sha256:')) {
             throw new Error('Invalid magnet link: missing sha256 hash');
@@ -33,6 +33,6 @@ export class MagnetLink {
         const relayAddr = params.get('relay') || '';
         const seedID = params.get('xs') || '';
 
-        return new MagnetLink(fileHash, fileName, relayAddr, seedID);
+        return new MagnetkLink(fileHash, fileName, relayAddr, seedID);
     }
 }

@@ -1,4 +1,4 @@
-module magnet
+module magnetk
 
 go 1.22.0
 

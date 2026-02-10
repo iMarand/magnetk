@@ -1,7 +1,7 @@
 {
-  "name": "magnet-sdk-js",
+  "name": "magnetk-sdk-js",
   "version": "2.0.0",
-  "description": "JavaScript SDK for Magnet P2P File Transfer System",
+  "description": "JavaScript SDK for Magnetk P2P File Transfer System",
   "main": "index.js",
   "type": "module",
   "scripts": {

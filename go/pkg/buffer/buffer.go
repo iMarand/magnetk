@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // BufferedChunk represents a chunk stored in the buffer

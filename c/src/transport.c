@@ -1,5 +1,5 @@
 /*
- * Magnet P2P Transport Layer - MsQuic Implementation
+ * Magnetk P2P Transport Layer - MsQuic Implementation
  *
  * Wraps MsQuic for high-performance QUIC transport.
  * Provides both async (callback) and sync (blocking) APIs.
@@ -27,32 +27,32 @@
 
 /* ===== Internal Structures ===== */
 
-struct magnet_transport {
+struct magnetk_transport {
     const QUIC_API_TABLE*   msquic;
     HQUIC                   registration;
     HQUIC                   config_server;   /* Server-side configuration */
     HQUIC                   config_client;   /* Client-side configuration */
-    magnet_config_t         cfg;
+    magnetk_config_t         cfg;
     QUIC_BUFFER             alpn;
     char                    alpn_str[64];
 };
 
-struct magnet_listener {
-    magnet_transport_t*         transport;
+struct magnetk_listener {
+    magnetk_transport_t*         transport;
     HQUIC                       handle;
-    magnet_on_connection_fn     on_connection;
-    magnet_on_stream_fn         on_stream;
-    magnet_on_data_fn           on_data;
-    magnet_on_close_fn          on_close;
+    magnetk_on_connection_fn     on_connection;
+    magnetk_on_stream_fn         on_stream;
+    magnetk_on_data_fn           on_data;
+    magnetk_on_close_fn          on_close;
     void*                       user_data;
 };
 
-struct magnet_connection {
-    magnet_transport_t*         transport;
+struct magnetk_connection {
+    magnetk_transport_t*         transport;
     HQUIC                       handle;
-    magnet_on_stream_fn         on_stream;
-    magnet_on_data_fn           on_data;
-    magnet_on_close_fn          on_close;
+    magnetk_on_stream_fn         on_stream;
+    magnetk_on_data_fn           on_data;
+    magnetk_on_close_fn          on_close;
     void*                       user_data;
     int                         is_server;
     /* For sync connect */
@@ -62,16 +62,16 @@ struct magnet_connection {
     pthread_mutex_t             connect_mutex;
     pthread_cond_t              connect_cond;
 #endif
-    magnet_status_t             connect_status;
+    magnetk_status_t             connect_status;
     volatile int                connected;
 };
 
-struct magnet_stream {
-    magnet_connection_t*        conn;
+struct magnetk_stream {
+    magnetk_connection_t*        conn;
     HQUIC                       handle;
-    magnet_on_data_fn           on_data;
-    magnet_on_send_complete_fn  on_send_complete;
-    magnet_on_close_fn          on_close;
+    magnetk_on_data_fn           on_data;
+    magnetk_on_send_complete_fn  on_send_complete;
+    magnetk_on_close_fn          on_close;
     void*                       user_data;
     /* For sync recv */
 #ifdef _WIN32
@@ -103,31 +103,31 @@ static QUIC_STATUS QUIC_API stream_callback(HQUIC Stream, void* Context, QUIC_ST
 
 /* ===== Utility ===== */
 
-MAGNET_API const char* magnet_status_string(magnet_status_t status) {
+MAGNETK_API const char* magnetk_status_string(magnetk_status_t status) {
     switch (status) {
-        case MAGNET_OK:                 return "OK";
-        case MAGNET_ERR_INIT:           return "Initialization failed";
-        case MAGNET_ERR_CONFIG:         return "Configuration error";
-        case MAGNET_ERR_LISTEN:         return "Listen failed";
-        case MAGNET_ERR_CONNECT:        return "Connection failed";
-        case MAGNET_ERR_SEND:           return "Send failed";
-        case MAGNET_ERR_RECV:           return "Receive failed";
-        case MAGNET_ERR_TIMEOUT:        return "Timeout";
-        case MAGNET_ERR_CLOSED:         return "Connection closed";
-        case MAGNET_ERR_TLS:            return "TLS error";
-        case MAGNET_ERR_MEMORY:         return "Out of memory";
-        case MAGNET_ERR_INVALID_PARAM:  return "Invalid parameter";
-        case MAGNET_ERR_STREAM:         return "Stream error";
-        case MAGNET_ERR_NOT_READY:      return "Not ready";
+        case MAGNETK_OK:                 return "OK";
+        case MAGNETK_ERR_INIT:           return "Initialization failed";
+        case MAGNETK_ERR_CONFIG:         return "Configuration error";
+        case MAGNETK_ERR_LISTEN:         return "Listen failed";
+        case MAGNETK_ERR_CONNECT:        return "Connection failed";
+        case MAGNETK_ERR_SEND:           return "Send failed";
+        case MAGNETK_ERR_RECV:           return "Receive failed";
+        case MAGNETK_ERR_TIMEOUT:        return "Timeout";
+        case MAGNETK_ERR_CLOSED:         return "Connection closed";
+        case MAGNETK_ERR_TLS:            return "TLS error";
+        case MAGNETK_ERR_MEMORY:         return "Out of memory";
+        case MAGNETK_ERR_INVALID_PARAM:  return "Invalid parameter";
+        case MAGNETK_ERR_STREAM:         return "Stream error";
+        case MAGNETK_ERR_NOT_READY:      return "Not ready";
         default:                        return "Unknown error";
     }
 }
 
-MAGNET_API void magnet_config_default(magnet_config_t* config) {
+MAGNETK_API void magnetk_config_default(magnetk_config_t* config) {
     memset(config, 0, sizeof(*config));
     config->bind_address = "0.0.0.0";
     config->port = 4002;
-    config->alpn = "magnet";
+    config->alpn = "magnetk";
     config->no_cert_validation = 1;  /* Dev mode by default */
     config->max_connections = 1000;
     config->idle_timeout_ms = 30000;
@@ -139,14 +139,14 @@ MAGNET_API void magnet_config_default(magnet_config_t* config) {
 
 /* ===== Transport Init/Shutdown ===== */
 
-MAGNET_API magnet_status_t magnet_transport_init(
-    magnet_config_t* config,
-    magnet_transport_t** out_transport)
+MAGNETK_API magnetk_status_t magnetk_transport_init(
+    magnetk_config_t* config,
+    magnetk_transport_t** out_transport)
 {
-    if (!config || !out_transport) return MAGNET_ERR_INVALID_PARAM;
+    if (!config || !out_transport) return MAGNETK_ERR_INVALID_PARAM;
 
-    magnet_transport_t* t = (magnet_transport_t*)calloc(1, sizeof(magnet_transport_t));
-    if (!t) return MAGNET_ERR_MEMORY;
+    magnetk_transport_t* t = (magnetk_transport_t*)calloc(1, sizeof(magnetk_transport_t));
+    if (!t) return MAGNETK_ERR_MEMORY;
 
     /* Copy config */
     t->cfg = *config;
@@ -154,23 +154,23 @@ MAGNET_API magnet_status_t magnet_transport_init(
     /* Open MsQuic API */
     QUIC_STATUS status = MsQuicOpen2(&t->msquic);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] MsQuicOpen2 failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] MsQuicOpen2 failed: 0x%x\n", status);
         free(t);
-        return MAGNET_ERR_INIT;
+        return MAGNETK_ERR_INIT;
     }
 
     /* Create registration */
-    QUIC_REGISTRATION_CONFIG reg_config = { "magnet-transport", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+    QUIC_REGISTRATION_CONFIG reg_config = { "magnetk-transport", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
     if (config->execution_profile == 1) {
         reg_config.ExecutionProfile = QUIC_EXECUTION_PROFILE_TYPE_MAX_THROUGHPUT;
     }
 
     status = t->msquic->RegistrationOpen(&reg_config, &t->registration);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] RegistrationOpen failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] RegistrationOpen failed: 0x%x\n", status);
         MsQuicClose(t->msquic);
         free(t);
-        return MAGNET_ERR_INIT;
+        return MAGNETK_ERR_INIT;
     }
 
     /* Setup ALPN */
@@ -200,11 +200,11 @@ MAGNET_API magnet_status_t magnet_transport_init(
         NULL,
         &t->config_server);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] Server ConfigurationOpen failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] Server ConfigurationOpen failed: 0x%x\n", status);
         t->msquic->RegistrationClose(t->registration);
         MsQuicClose(t->msquic);
         free(t);
-        return MAGNET_ERR_CONFIG;
+        return MAGNETK_ERR_CONFIG;
     }
 
     /* Load server TLS credentials */
@@ -223,12 +223,12 @@ MAGNET_API magnet_status_t magnet_transport_init(
 
     status = t->msquic->ConfigurationLoadCredential(t->config_server, &cred_config);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] Server ConfigurationLoadCredential failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] Server ConfigurationLoadCredential failed: 0x%x\n", status);
         t->msquic->ConfigurationClose(t->config_server);
         t->msquic->RegistrationClose(t->registration);
         MsQuicClose(t->msquic);
         free(t);
-        return MAGNET_ERR_TLS;
+        return MAGNETK_ERR_TLS;
     }
 
     /* Create client configuration */
@@ -239,12 +239,12 @@ MAGNET_API magnet_status_t magnet_transport_init(
         NULL,
         &t->config_client);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] Client ConfigurationOpen failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] Client ConfigurationOpen failed: 0x%x\n", status);
         t->msquic->ConfigurationClose(t->config_server);
         t->msquic->RegistrationClose(t->registration);
         MsQuicClose(t->msquic);
         free(t);
-        return MAGNET_ERR_CONFIG;
+        return MAGNETK_ERR_CONFIG;
     }
 
     /* Load client TLS credentials */
@@ -257,20 +257,20 @@ MAGNET_API magnet_status_t magnet_transport_init(
 
     status = t->msquic->ConfigurationLoadCredential(t->config_client, &client_cred);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnet] Client ConfigurationLoadCredential failed: 0x%x\n", status);
+        fprintf(stderr, "[magnetk] Client ConfigurationLoadCredential failed: 0x%x\n", status);
         t->msquic->ConfigurationClose(t->config_client);
         t->msquic->ConfigurationClose(t->config_server);
         t->msquic->RegistrationClose(t->registration);
         MsQuicClose(t->msquic);
         free(t);
-        return MAGNET_ERR_TLS;
+        return MAGNETK_ERR_TLS;
     }
 
     *out_transport = t;
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }
 
-MAGNET_API void magnet_transport_shutdown(magnet_transport_t* transport) {
+MAGNETK_API void magnetk_transport_shutdown(magnetk_transport_t* transport) {
     if (!transport) return;
     if (transport->config_client) transport->msquic->ConfigurationClose(transport->config_client);
     if (transport->config_server) transport->msquic->ConfigurationClose(transport->config_server);
@@ -284,13 +284,13 @@ MAGNET_API void magnet_transport_shutdown(magnet_transport_t* transport) {
 static QUIC_STATUS QUIC_API listener_callback(
     HQUIC Listener, void* Context, QUIC_LISTENER_EVENT* Event)
 {
-    magnet_listener_t* listener = (magnet_listener_t*)Context;
+    magnetk_listener_t* listener = (magnetk_listener_t*)Context;
     (void)Listener;
 
     switch (Event->Type) {
     case QUIC_LISTENER_EVENT_NEW_CONNECTION: {
         /* Create connection wrapper */
-        magnet_connection_t* conn = (magnet_connection_t*)calloc(1, sizeof(magnet_connection_t));
+        magnetk_connection_t* conn = (magnetk_connection_t*)calloc(1, sizeof(magnetk_connection_t));
         if (!conn) return QUIC_STATUS_OUT_OF_MEMORY;
 
         conn->transport = listener->transport;
@@ -331,19 +331,19 @@ static QUIC_STATUS QUIC_API listener_callback(
     }
 }
 
-MAGNET_API magnet_status_t magnet_listen(
-    magnet_transport_t*     transport,
-    magnet_on_connection_fn on_connection,
-    magnet_on_stream_fn     on_stream,
-    magnet_on_data_fn       on_data,
-    magnet_on_close_fn      on_close,
+MAGNETK_API magnetk_status_t magnetk_listen(
+    magnetk_transport_t*     transport,
+    magnetk_on_connection_fn on_connection,
+    magnetk_on_stream_fn     on_stream,
+    magnetk_on_data_fn       on_data,
+    magnetk_on_close_fn      on_close,
     void*                   user_data,
-    magnet_listener_t**     out_listener)
+    magnetk_listener_t**     out_listener)
 {
-    if (!transport || !out_listener) return MAGNET_ERR_INVALID_PARAM;
+    if (!transport || !out_listener) return MAGNETK_ERR_INVALID_PARAM;
 
-    magnet_listener_t* listener = (magnet_listener_t*)calloc(1, sizeof(magnet_listener_t));
-    if (!listener) return MAGNET_ERR_MEMORY;
+    magnetk_listener_t* listener = (magnetk_listener_t*)calloc(1, sizeof(magnetk_listener_t));
+    if (!listener) return MAGNETK_ERR_MEMORY;
 
     listener->transport = transport;
     listener->on_connection = on_connection;
@@ -359,7 +359,7 @@ MAGNET_API magnet_status_t magnet_listen(
         &listener->handle);
     if (QUIC_FAILED(status)) {
         free(listener);
-        return MAGNET_ERR_LISTEN;
+        return MAGNETK_ERR_LISTEN;
     }
 
     /* Build address */
@@ -374,14 +374,14 @@ MAGNET_API magnet_status_t magnet_listen(
     if (QUIC_FAILED(status)) {
         transport->msquic->ListenerClose(listener->handle);
         free(listener);
-        return MAGNET_ERR_LISTEN;
+        return MAGNETK_ERR_LISTEN;
     }
 
     *out_listener = listener;
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }
 
-MAGNET_API void magnet_listener_close(magnet_listener_t* listener) {
+MAGNETK_API void magnetk_listener_close(magnetk_listener_t* listener) {
     if (!listener) return;
     if (listener->handle) {
         listener->transport->msquic->ListenerClose(listener->handle);
@@ -394,7 +394,7 @@ MAGNET_API void magnet_listener_close(magnet_listener_t* listener) {
 static QUIC_STATUS QUIC_API server_conn_callback(
     HQUIC Connection, void* Context, QUIC_CONNECTION_EVENT* Event)
 {
-    magnet_connection_t* conn = (magnet_connection_t*)Context;
+    magnetk_connection_t* conn = (magnetk_connection_t*)Context;
     (void)Connection;
 
     switch (Event->Type) {
@@ -406,7 +406,7 @@ static QUIC_STATUS QUIC_API server_conn_callback(
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
         conn->connected = 0;
         if (conn->on_close) {
-            conn->on_close(conn, MAGNET_ERR_CLOSED, conn->user_data);
+            conn->on_close(conn, MAGNETK_ERR_CLOSED, conn->user_data);
         }
         return QUIC_STATUS_SUCCESS;
 
@@ -417,7 +417,7 @@ static QUIC_STATUS QUIC_API server_conn_callback(
 
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
         /* Wrap the stream */
-        magnet_stream_t* stream = (magnet_stream_t*)calloc(1, sizeof(magnet_stream_t));
+        magnetk_stream_t* stream = (magnetk_stream_t*)calloc(1, sizeof(magnetk_stream_t));
         if (!stream) return QUIC_STATUS_OUT_OF_MEMORY;
 
         stream->conn = conn;
@@ -458,13 +458,13 @@ static QUIC_STATUS QUIC_API server_conn_callback(
 static QUIC_STATUS QUIC_API client_conn_callback(
     HQUIC Connection, void* Context, QUIC_CONNECTION_EVENT* Event)
 {
-    magnet_connection_t* conn = (magnet_connection_t*)Context;
+    magnetk_connection_t* conn = (magnetk_connection_t*)Context;
     (void)Connection;
 
     switch (Event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
         conn->connected = 1;
-        conn->connect_status = MAGNET_OK;
+        conn->connect_status = MAGNETK_OK;
 #ifdef _WIN32
         SetEvent(conn->connect_event);
 #else
@@ -476,7 +476,7 @@ static QUIC_STATUS QUIC_API client_conn_callback(
 
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
         conn->connected = 0;
-        conn->connect_status = MAGNET_ERR_CONNECT;
+        conn->connect_status = MAGNETK_ERR_CONNECT;
 #ifdef _WIN32
         SetEvent(conn->connect_event);
 #else
@@ -485,14 +485,14 @@ static QUIC_STATUS QUIC_API client_conn_callback(
         pthread_mutex_unlock(&conn->connect_mutex);
 #endif
         if (conn->on_close) {
-            conn->on_close(conn, MAGNET_ERR_CLOSED, conn->user_data);
+            conn->on_close(conn, MAGNETK_ERR_CLOSED, conn->user_data);
         }
         return QUIC_STATUS_SUCCESS;
 
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
         conn->connected = 0;
         if (conn->on_close) {
-            conn->on_close(conn, MAGNET_ERR_CLOSED, conn->user_data);
+            conn->on_close(conn, MAGNETK_ERR_CLOSED, conn->user_data);
         }
         return QUIC_STATUS_SUCCESS;
 
@@ -508,7 +508,7 @@ static QUIC_STATUS QUIC_API client_conn_callback(
         return QUIC_STATUS_SUCCESS;
 
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED: {
-        magnet_stream_t* stream = (magnet_stream_t*)calloc(1, sizeof(magnet_stream_t));
+        magnetk_stream_t* stream = (magnetk_stream_t*)calloc(1, sizeof(magnetk_stream_t));
         if (!stream) return QUIC_STATUS_OUT_OF_MEMORY;
 
         stream->conn = conn;
@@ -543,20 +543,20 @@ static QUIC_STATUS QUIC_API client_conn_callback(
     }
 }
 
-MAGNET_API magnet_status_t magnet_connect(
-    magnet_transport_t*   transport,
+MAGNETK_API magnetk_status_t magnetk_connect(
+    magnetk_transport_t*   transport,
     const char*           host,
     uint16_t              port,
-    magnet_on_stream_fn   on_stream,
-    magnet_on_data_fn     on_data,
-    magnet_on_close_fn    on_close,
+    magnetk_on_stream_fn   on_stream,
+    magnetk_on_data_fn     on_data,
+    magnetk_on_close_fn    on_close,
     void*                 user_data,
-    magnet_connection_t** out_conn)
+    magnetk_connection_t** out_conn)
 {
-    if (!transport || !host || !out_conn) return MAGNET_ERR_INVALID_PARAM;
+    if (!transport || !host || !out_conn) return MAGNETK_ERR_INVALID_PARAM;
 
-    magnet_connection_t* conn = (magnet_connection_t*)calloc(1, sizeof(magnet_connection_t));
-    if (!conn) return MAGNET_ERR_MEMORY;
+    magnetk_connection_t* conn = (magnetk_connection_t*)calloc(1, sizeof(magnetk_connection_t));
+    if (!conn) return MAGNETK_ERR_MEMORY;
 
     conn->transport = transport;
     conn->on_stream = on_stream;
@@ -564,7 +564,7 @@ MAGNET_API magnet_status_t magnet_connect(
     conn->on_close = on_close;
     conn->user_data = user_data;
     conn->is_server = 0;
-    conn->connect_status = MAGNET_ERR_NOT_READY;
+    conn->connect_status = MAGNETK_ERR_NOT_READY;
 
 #ifdef _WIN32
     conn->connect_event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -587,7 +587,7 @@ MAGNET_API magnet_status_t magnet_connect(
         pthread_cond_destroy(&conn->connect_cond);
 #endif
         free(conn);
-        return MAGNET_ERR_CONNECT;
+        return MAGNETK_ERR_CONNECT;
     }
 
     /* Start connection */
@@ -606,7 +606,7 @@ MAGNET_API magnet_status_t magnet_connect(
         pthread_cond_destroy(&conn->connect_cond);
 #endif
         free(conn);
-        return MAGNET_ERR_CONNECT;
+        return MAGNETK_ERR_CONNECT;
     }
 
     /* Wait for connection to complete */
@@ -614,7 +614,7 @@ MAGNET_API magnet_status_t magnet_connect(
     DWORD wait_result = WaitForSingleObject(conn->connect_event, transport->cfg.idle_timeout_ms);
     if (wait_result == WAIT_TIMEOUT) {
         transport->msquic->ConnectionShutdown(conn->handle, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
-        return MAGNET_ERR_TIMEOUT;
+        return MAGNETK_ERR_TIMEOUT;
     }
 #else
     struct timespec ts;
@@ -624,7 +624,7 @@ MAGNET_API magnet_status_t magnet_connect(
     if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
 
     pthread_mutex_lock(&conn->connect_mutex);
-    while (!conn->connected && conn->connect_status == MAGNET_ERR_NOT_READY) {
+    while (!conn->connected && conn->connect_status == MAGNETK_ERR_NOT_READY) {
         int ret = pthread_cond_timedwait(&conn->connect_cond, &conn->connect_mutex, &ts);
         if (ret != 0) break;
     }
@@ -632,7 +632,7 @@ MAGNET_API magnet_status_t magnet_connect(
 
     if (!conn->connected) {
         transport->msquic->ConnectionShutdown(conn->handle, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
-        return MAGNET_ERR_TIMEOUT;
+        return MAGNETK_ERR_TIMEOUT;
     }
 #endif
 
@@ -640,7 +640,7 @@ MAGNET_API magnet_status_t magnet_connect(
     return conn->connect_status;
 }
 
-MAGNET_API void magnet_connection_close(magnet_connection_t* conn) {
+MAGNETK_API void magnetk_connection_close(magnetk_connection_t* conn) {
     if (!conn) return;
     if (conn->handle) {
         conn->transport->msquic->ConnectionShutdown(
@@ -649,11 +649,11 @@ MAGNET_API void magnet_connection_close(magnet_connection_t* conn) {
     /* The connection will be freed in the shutdown complete callback */
 }
 
-MAGNET_API void magnet_connection_set_userdata(magnet_connection_t* conn, void* user_data) {
+MAGNETK_API void magnetk_connection_set_userdata(magnetk_connection_t* conn, void* user_data) {
     if (conn) conn->user_data = user_data;
 }
 
-MAGNET_API void* magnet_connection_get_userdata(magnet_connection_t* conn) {
+MAGNETK_API void* magnetk_connection_get_userdata(magnetk_connection_t* conn) {
     return conn ? conn->user_data : NULL;
 }
 
@@ -662,7 +662,7 @@ MAGNET_API void* magnet_connection_get_userdata(magnet_connection_t* conn) {
 static QUIC_STATUS QUIC_API stream_callback(
     HQUIC Stream, void* Context, QUIC_STREAM_EVENT* Event)
 {
-    magnet_stream_t* stream = (magnet_stream_t*)Context;
+    magnetk_stream_t* stream = (magnetk_stream_t*)Context;
     (void)Stream;
 
     switch (Event->Type) {
@@ -750,7 +750,7 @@ static QUIC_STATUS QUIC_API stream_callback(
 
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         if (stream->on_close) {
-            stream->on_close(stream, MAGNET_ERR_CLOSED, stream->user_data);
+            stream->on_close(stream, MAGNETK_ERR_CLOSED, stream->user_data);
         }
 #ifdef _WIN32
         if (stream->recv_event) CloseHandle(stream->recv_event);
@@ -773,19 +773,19 @@ static QUIC_STATUS QUIC_API stream_callback(
 
 /* ===== Stream Operations ===== */
 
-MAGNET_API magnet_status_t magnet_stream_open(
-    magnet_connection_t*       conn,
-    magnet_on_data_fn          on_data,
-    magnet_on_send_complete_fn on_send_complete,
-    magnet_on_close_fn         on_close,
+MAGNETK_API magnetk_status_t magnetk_stream_open(
+    magnetk_connection_t*       conn,
+    magnetk_on_data_fn          on_data,
+    magnetk_on_send_complete_fn on_send_complete,
+    magnetk_on_close_fn         on_close,
     void*                      user_data,
-    magnet_stream_t**          out_stream)
+    magnetk_stream_t**          out_stream)
 {
-    if (!conn || !out_stream) return MAGNET_ERR_INVALID_PARAM;
-    if (!conn->connected) return MAGNET_ERR_NOT_READY;
+    if (!conn || !out_stream) return MAGNETK_ERR_INVALID_PARAM;
+    if (!conn->connected) return MAGNETK_ERR_NOT_READY;
 
-    magnet_stream_t* stream = (magnet_stream_t*)calloc(1, sizeof(magnet_stream_t));
-    if (!stream) return MAGNET_ERR_MEMORY;
+    magnetk_stream_t* stream = (magnetk_stream_t*)calloc(1, sizeof(magnetk_stream_t));
+    if (!stream) return MAGNETK_ERR_MEMORY;
 
     stream->conn = conn;
     stream->on_data = on_data;
@@ -822,7 +822,7 @@ MAGNET_API magnet_status_t magnet_stream_open(
         pthread_cond_destroy(&stream->send_cond);
 #endif
         free(stream);
-        return MAGNET_ERR_STREAM;
+        return MAGNETK_ERR_STREAM;
     }
 
     status = conn->transport->msquic->StreamStart(
@@ -841,29 +841,29 @@ MAGNET_API magnet_status_t magnet_stream_open(
         pthread_cond_destroy(&stream->send_cond);
 #endif
         free(stream);
-        return MAGNET_ERR_STREAM;
+        return MAGNETK_ERR_STREAM;
     }
 
     *out_stream = stream;
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }
 
-MAGNET_API magnet_status_t magnet_stream_send(
-    magnet_stream_t* stream,
+MAGNETK_API magnetk_status_t magnetk_stream_send(
+    magnetk_stream_t* stream,
     const uint8_t*   data,
     uint32_t         length,
     int              fin)
 {
-    if (!stream || !data) return MAGNET_ERR_INVALID_PARAM;
+    if (!stream || !data) return MAGNETK_ERR_INVALID_PARAM;
 
     /* Copy data (MsQuic needs buffer alive until send complete) */
     uint8_t* copy = (uint8_t*)malloc(length);
-    if (!copy) return MAGNET_ERR_MEMORY;
+    if (!copy) return MAGNETK_ERR_MEMORY;
     memcpy(copy, data, length);
 
     /* Allocate QUIC_BUFFER on heap so it survives the call */
     QUIC_BUFFER* buf = (QUIC_BUFFER*)malloc(sizeof(QUIC_BUFFER));
-    if (!buf) { free(copy); return MAGNET_ERR_MEMORY; }
+    if (!buf) { free(copy); return MAGNETK_ERR_MEMORY; }
     buf->Buffer = copy;
     buf->Length = length;
 
@@ -877,7 +877,7 @@ MAGNET_API magnet_status_t magnet_stream_send(
     if (QUIC_FAILED(status)) {
         free(copy);
         free(buf);
-        return MAGNET_ERR_SEND;
+        return MAGNETK_ERR_SEND;
     }
 
     /* Note: buf is leaked here. In production, we'd track it.
@@ -885,20 +885,20 @@ MAGNET_API magnet_status_t magnet_stream_send(
        We also need to free buf — let's pack them together. */
     /* TODO: Combine buf+copy into a single allocation for production */
 
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }
 
-MAGNET_API magnet_status_t magnet_stream_send_zerocopy(
-    magnet_stream_t* stream,
+MAGNETK_API magnetk_status_t magnetk_stream_send_zerocopy(
+    magnetk_stream_t* stream,
     const uint8_t*   data,
     uint32_t         length,
     int              fin,
     void*            send_context)
 {
-    if (!stream || !data) return MAGNET_ERR_INVALID_PARAM;
+    if (!stream || !data) return MAGNETK_ERR_INVALID_PARAM;
 
     QUIC_BUFFER* buf = (QUIC_BUFFER*)malloc(sizeof(QUIC_BUFFER));
-    if (!buf) return MAGNET_ERR_MEMORY;
+    if (!buf) return MAGNETK_ERR_MEMORY;
     buf->Buffer = (uint8_t*)data;
     buf->Length = length;
 
@@ -911,23 +911,23 @@ MAGNET_API magnet_status_t magnet_stream_send_zerocopy(
         send_context);
     if (QUIC_FAILED(status)) {
         free(buf);
-        return MAGNET_ERR_SEND;
+        return MAGNETK_ERR_SEND;
     }
 
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }
 
-MAGNET_API magnet_status_t magnet_stream_shutdown_send(magnet_stream_t* stream) {
-    if (!stream) return MAGNET_ERR_INVALID_PARAM;
+MAGNETK_API magnetk_status_t magnetk_stream_shutdown_send(magnetk_stream_t* stream) {
+    if (!stream) return MAGNETK_ERR_INVALID_PARAM;
 
     QUIC_STATUS status = stream->conn->transport->msquic->StreamShutdown(
         stream->handle,
         QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL,
         0);
-    return QUIC_FAILED(status) ? MAGNET_ERR_STREAM : MAGNET_OK;
+    return QUIC_FAILED(status) ? MAGNETK_ERR_STREAM : MAGNETK_OK;
 }
 
-MAGNET_API void magnet_stream_close(magnet_stream_t* stream) {
+MAGNETK_API void magnetk_stream_close(magnetk_stream_t* stream) {
     if (!stream) return;
     if (stream->handle) {
         stream->conn->transport->msquic->StreamShutdown(
@@ -938,28 +938,28 @@ MAGNET_API void magnet_stream_close(magnet_stream_t* stream) {
     /* Stream will be freed in shutdown complete callback */
 }
 
-MAGNET_API void magnet_stream_set_userdata(magnet_stream_t* stream, void* user_data) {
+MAGNETK_API void magnetk_stream_set_userdata(magnetk_stream_t* stream, void* user_data) {
     if (stream) stream->user_data = user_data;
 }
 
-MAGNET_API void* magnet_stream_get_userdata(magnet_stream_t* stream) {
+MAGNETK_API void* magnetk_stream_get_userdata(magnetk_stream_t* stream) {
     return stream ? stream->user_data : NULL;
 }
 
 /* ===== Synchronous Helpers ===== */
 
-MAGNET_API magnet_status_t magnet_stream_send_sync(
-    magnet_stream_t* stream,
+MAGNETK_API magnetk_status_t magnetk_stream_send_sync(
+    magnetk_stream_t* stream,
     const uint8_t*   data,
     uint32_t         length,
     int              fin)
 {
-    if (!stream || !data) return MAGNET_ERR_INVALID_PARAM;
+    if (!stream || !data) return MAGNETK_ERR_INVALID_PARAM;
 
     stream->send_complete = 0;
 
-    magnet_status_t result = magnet_stream_send(stream, data, length, fin);
-    if (result != MAGNET_OK) return result;
+    magnetk_status_t result = magnetk_stream_send(stream, data, length, fin);
+    if (result != MAGNETK_OK) return result;
 
     /* Wait for send complete */
 #ifdef _WIN32
@@ -975,18 +975,18 @@ MAGNET_API magnet_status_t magnet_stream_send_sync(
     pthread_mutex_unlock(&stream->send_mutex);
 #endif
 
-    return stream->send_complete ? MAGNET_OK : MAGNET_ERR_TIMEOUT;
+    return stream->send_complete ? MAGNETK_OK : MAGNETK_ERR_TIMEOUT;
 }
 
-MAGNET_API magnet_status_t magnet_stream_recv_sync(
-    magnet_stream_t* stream,
+MAGNETK_API magnetk_status_t magnetk_stream_recv_sync(
+    magnetk_stream_t* stream,
     uint8_t*         buffer,
     uint32_t         buffer_size,
     uint32_t*        out_length,
     int*             out_fin,
     uint32_t         timeout_ms)
 {
-    if (!stream || !buffer || !out_length) return MAGNET_ERR_INVALID_PARAM;
+    if (!stream || !buffer || !out_length) return MAGNETK_ERR_INVALID_PARAM;
 
     stream->recv_buffer = buffer;
     stream->recv_length = buffer_size;
@@ -997,7 +997,7 @@ MAGNET_API magnet_status_t magnet_stream_recv_sync(
     DWORD wait_result = WaitForSingleObject(stream->recv_event, timeout_ms);
     if (wait_result == WAIT_TIMEOUT) {
         stream->recv_pending = 0;
-        return MAGNET_ERR_TIMEOUT;
+        return MAGNETK_ERR_TIMEOUT;
     }
 #else
     struct timespec ts;
@@ -1011,7 +1011,7 @@ MAGNET_API magnet_status_t magnet_stream_recv_sync(
         if (pthread_cond_timedwait(&stream->recv_cond, &stream->recv_mutex, &ts) != 0) {
             stream->recv_pending = 0;
             pthread_mutex_unlock(&stream->recv_mutex);
-            return MAGNET_ERR_TIMEOUT;
+            return MAGNETK_ERR_TIMEOUT;
         }
     }
     pthread_mutex_unlock(&stream->recv_mutex);
@@ -1023,8 +1023,8 @@ MAGNET_API magnet_status_t magnet_stream_recv_sync(
     stream->recv_buffer = NULL;
 
     if (stream->recv_length == 0 && stream->recv_fin) {
-        return MAGNET_ERR_CLOSED;
+        return MAGNETK_ERR_CLOSED;
     }
 
-    return MAGNET_OK;
+    return MAGNETK_OK;
 }

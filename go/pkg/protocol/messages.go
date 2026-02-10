@@ -4,7 +4,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // Protocol IDs for libp2p streams

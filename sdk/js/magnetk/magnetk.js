@@ -1,7 +1,7 @@
 /**
- * Magnet Link Parser and Generator for Magnet P2P
+ * Magnetk Link Parser and Generator for Magnetk P2P
  */
-export class MagnetLink {
+export class MagnetkLink {
     constructor(fileHash, fileName, fileSize, seedId, relayAddr) {
         this.fileHash = fileHash;
         this.fileName = fileName;
@@ -11,17 +11,17 @@ export class MagnetLink {
     }
 
     /**
-     * Parses a magnet URI string.
-     * Format: magnet:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&xs=<seed_id>&relay=<relay_addr>
+     * Parses a magnetk URI string.
+     * Format: magnetk:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&xs=<seed_id>&relay=<relay_addr>
      * @param {string} uri 
-     * @returns {MagnetLink}
+     * @returns {MagnetkLink}
      */
     static parse(uri) {
-        if (!uri.startsWith('magnet:?')) {
-            throw new Error('Invalid magnet link: must start with magnet:?');
+        if (!uri.startsWith('magnetk:?')) {
+            throw new Error('Invalid magnet link: must start with magnetk:?');
         }
 
-        const params = new URLSearchParams(uri.slice(8));
+        const params = new URLSearchParams(uri.slice(9)); // slicing 'magnetk:?' length is 9? No. 'magnet:?' is 8. 'magnetk:?' is 9. Correct.
         const xt = params.get('xt');
         if (!xt || !xt.startsWith('urn:sha256:')) {
             throw new Error('Invalid magnet link: missing xt (urn:sha256:...)');
@@ -33,11 +33,11 @@ export class MagnetLink {
         const seedId = params.get('xs') || '';
         const relayAddr = params.get('relay') || '';
 
-        return new MagnetLink(fileHash, fileName, fileSize, seedId, relayAddr);
+        return new MagnetkLink(fileHash, fileName, fileSize, seedId, relayAddr);
     }
 
     /**
-     * Generates a magnet URI string.
+     * Generates a magnetk URI string.
      * @returns {string}
      */
     toString() {
@@ -48,6 +48,6 @@ export class MagnetLink {
         if (this.seedId) parts.push(`xs=${encodeURIComponent(this.seedId)}`);
         if (this.relayAddr) parts.push(`relay=${this.relayAddr}`); // Multiaddr usually kept raw
 
-        return `magnet:?${parts.join('&')}`;
+        return `magnetk:?${parts.join('&')}`;
     }
 }

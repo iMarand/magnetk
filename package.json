@@ -1,6 +1,6 @@
 {
-    "name": "magnet-transfer",
+    "name": "magnetk-transfer",
     "version": "1.0.0",
-    "description": "Magnet P2P File Transfer System",
+    "description": "Magnetk P2P File Transfer System",
     "dependencies": {}
 }

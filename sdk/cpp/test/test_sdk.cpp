@@ -1,9 +1,9 @@
 #include <iostream>
 #include <cassert>
-#include "magnet.hpp"
+#include "magnetk.hpp"
 
 void test_magnet_link() {
-    std::string uri = "magnet:?xt=urn:sha256:abc123hash&dn=test.txt&xl=1024";
+    std::string uri = "magnetk:?xt=urn:sha256:abc123hash&dn=test.txt&xl=1024";
     auto ml = magnet::MagnetLink::parse(uri);
     
     assert(ml.file_hash == "abc123hash");
@@ -25,7 +25,7 @@ int main() {
         std::cout << "Client initialized successfully" << std::endl;
         
         client.download(
-            "magnet:?xt=urn:sha256:dummy&dn=dummy.bin&xl=1000",
+            "magnetk:?xt=urn:sha256:dummy&dn=dummy.bin&xl=1000",
             "./",
             [](const magnet::Progress& p) {
                 std::cout << "Progress: " << p.percent << "%" << std::endl;

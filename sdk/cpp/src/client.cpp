@@ -1,20 +1,20 @@
-#include "magnet.hpp"
+#include "magnetk.hpp"
 #include <iostream>
 #include <thread>
 #include <chrono>
 
-namespace magnet {
+namespace magnetk {
 
 Client::Client(const Config& config) : config_(config), transport_(nullptr) {
-    magnet_config_t c_config;
-    magnet_config_default(&c_config);
+    magnetk_config_t c_config;
+    magnetk_config_default(&c_config);
 
     c_config.bind_address = config.bind_address.c_str();
     c_config.max_connections = config.max_conns;
     c_config.no_cert_validation = config.no_cert_validation;
-    c_config.alpn = "magnet";
+    c_config.alpn = "magnetk";
 
-    magnet_status_t status = magnet_transport_init(&c_config, &transport_);
+    magnet_status_t status = magnetk_transport_init(&c_config, &transport_);
     if (status != MAGNET_OK) {
         throw Error("Failed to initialize transport: " + std::to_string(status));
     }
@@ -61,4 +61,4 @@ void Client::download(const std::string& magnet_uri, const std::string& output_p
     }
 }
 
-} // namespace magnet
+} // namespace magnetk

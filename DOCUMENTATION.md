@@ -44,7 +44,7 @@ Ideal for building high-performance P2P applications with direct native transpor
 
 **Installation**:
 ```go
-import "github.com/iMarand/magnetk/sdk/go/magnet"
+import "github.com/iMarand/magnetk/sdk/go/magnetk"
 ```
 
 **Usage**:
@@ -56,7 +56,7 @@ if err != nil {
 }
 
 // Download a file
-err = client.Download("magnet:?xt=urn:sha256:...", "./output.file")
+err = client.Download("magnetk:?xt=urn:sha256:...", "./output.file")
 ```
 
 ### JavaScript SDK (Node.js)
@@ -64,7 +64,7 @@ Perfect for web services or Electron apps. Connects to the relay/p2p network via
 
 **Installation**:
 ```bash
-cd sdk/js/magnet
+cd sdk/js/magnetk
 npm install
 ```
 
@@ -73,7 +73,7 @@ npm install
 import { MagnetkClient } from './client.js';
 
 const client = new MagnetkClient();
-await client.download('magnet:?xt=urn:sha256:...', './downloads');
+await client.download('magnetk:?xt=urn:sha256:...', './downloads');
 ```
 
 ### C++ SDK
@@ -89,10 +89,10 @@ make
 
 **Usage**:
 ```cpp
-#include "magnetk_sdk.h"
+#include "magnetk.hpp"
 
-magnetk_client_t* client = magnetk_client_init();
-magnetk_client_download(client, "magnet:?xt=...", "./out.dat");
+magnetk::Client client;
+client.download("magnetk:?xt=...", "./out.dat");
 ```
 
 ---

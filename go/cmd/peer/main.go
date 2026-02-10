@@ -1,4 +1,4 @@
-// Peer client for the Magnet P2P network.
+// Peer client for the MAGNETK P2P network.
 //
 // The peer downloads files from seeds:
 // - Connects to relay via libp2p to discover seeds
@@ -26,27 +26,27 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 
-	"github.com/iMarand/magnetk/pkg/chunk"
-	"github.com/iMarand/magnetk/pkg/config"
-	magnetLink "github.com/iMarand/magnetk/pkg/transport"
-	"github.com/iMarand/magnetk/pkg/protocol"
-	"github.com/iMarand/magnetk/pkg/state"
-	"github.com/iMarand/magnetk/pkg/transport"
-	"github.com/iMarand/magnetk/pkg/types"
+	"magnetk/pkg/chunk"
+	"magnetk/pkg/config"
+	magnetkLink "magnetk/pkg/magnetk"
+	"magnetk/pkg/protocol"
+	"magnetk/pkg/state"
+	"magnetk/pkg/transport"
+	"magnetk/pkg/types"
 )
 
 func main() {
-	magnetURI := flag.String("magnet", "", "Magnet link to download")
+	magnetURI := flag.String("magnetk", "", "Magnet link to download")
 	relayAddr := flag.String("relay", "", "Relay multiaddr (if not in magnet link)")
 	outputPath := flag.String("output", "", "Output file path (default: current directory)")
 	configPath := flag.String("config", "./config/settings.conf", "Path to config file")
 	flag.Parse()
 
 	if *magnetURI == "" {
-		fmt.Println("Usage: peer --magnet <magnet_link> [--output <path>] [--relay <addr>]")
+		fmt.Println("Usage: peer --magnetk <magnet_link> [--output <path>] [--relay <addr>]")
 		fmt.Println()
 		fmt.Println("Options:")
-		fmt.Println("  --magnet   Magnet link (required)")
+		fmt.Println("  --magnetk   Magnet link (required)")
 		fmt.Println("  --output   Output file path (default: filename from magnet)")
 		fmt.Println("  --relay    Override relay address")
 		flag.PrintDefaults()
@@ -61,13 +61,13 @@ func main() {
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
-	fmt.Println("║         MAGNET P2P PEER CLIENT               ║")
+	fmt.Println("║         MAGNETK P2P PEER CLIENT               ║")
 	fmt.Println("║         Hybrid MsQuic + libp2p              ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 
 	// ===== 1. Parse magnet link =====
-	ml, err := magnetLink.Parse(*magnetURI)
+	ml, err := magnetkLink.Parse(*magnetURI)
 	if err != nil {
 		log.Fatalf("[peer] Invalid magnet link: %v", err)
 	}
@@ -167,7 +167,7 @@ func main() {
 // downloadFile downloads a file from a seed via MsQuic
 func downloadFile(
 	seed protocol.SeedInfo,
-	ml *magnetLink.MagnetLink,
+	ml *magnetkLink.MagnetLink,
 	outFile string,
 	cfg *config.Config,
 	stateMgr *state.Manager,
@@ -181,7 +181,7 @@ func downloadFile(
 		BindAddress:       cfg.EffectiveBindAddress(),
 		Port:              0, // Any available port for client
 		NoCertValidation:  cfg.NoCertValidation,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    10,
 		IdleTimeoutMs:     60000,
 		SendBufferSize:    cfg.SendBufferSizeBytes(),

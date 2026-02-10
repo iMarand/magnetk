@@ -1,13 +1,13 @@
-#include "magnet.hpp"
+#include "magnetk.hpp"
 #include <sstream>
 #include <map>
 #include <algorithm>
 
-namespace magnet {
+namespace magnetk {
 
 MagnetLink MagnetLink::parse(const std::string& uri) {
-    if (uri.substr(0, 8) != "magnet:?") {
-        throw Error("Invalid magnet link: must start with magnet:?");
+    if (uri.substr(0, 8) != "magnetk:?") {
+        throw Error("Invalid magnet link: must start with magnetk:?");
     }
 
     std::string query = uri.substr(8);
@@ -54,7 +54,7 @@ MagnetLink MagnetLink::parse(const std::string& uri) {
 
 std::string MagnetLink::to_string() const {
     std::stringstream ss;
-    ss << "magnet:?xt=urn:sha256:" << file_hash;
+    ss << "magnetk:?xt=urn:sha256:" << file_hash;
     if (!file_name.empty()) ss << "&dn=" << file_name;
     if (file_size > 0) ss << "&xl=" << file_size;
     if (!seed_id.empty()) ss << "&xs=" << seed_id;
@@ -62,4 +62,4 @@ std::string MagnetLink::to_string() const {
     return ss.str();
 }
 
-} // namespace magnet
+} // namespace magnetk

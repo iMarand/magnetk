@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magnetk-sdk"
+version = "1.0.0"
+description = "Magnetk P2P SDK for Python"
+authors = [{name = "iMarand"}]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+
+[project.urls]
+"Homepage" = "https://github.com/iMarand/magnetk"

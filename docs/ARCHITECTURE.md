@@ -5,7 +5,7 @@
 **Magnetk** is a hybrid P2P file transfer network with three node types:
 - **Relay Nodes** (your infrastructure) - Network backbone
 - **Seed Nodes** (third-party VPS) - File hosts using Magnetk SDK
-- **Peer Clients** (end users) - Download files via magnet links
+- **Peer Clients** (end users) - Download files via magnetk links
 
 ---
 
@@ -61,7 +61,7 @@ graph TB
 │                   APPLICATION LAYER                          │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Magnetk SDK │  │ Magnet Link  │  │    Chunk     │      │
+│  │  Magnetk SDK │  │ Magnetk Link │  │    Chunk     │      │
 │  │   (Go/Py/JS) │  │   Parser     │  │   Manager    │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 ├─────────────────────────────────────────────────────────────┤
@@ -82,20 +82,20 @@ graph TB
 
 ---
 
-## Magnet Link Structure
+## Magnetk Link Structure
 
 ```
-magnet:?xt=urn:sha256:<HASH>&dn=<NAME>&xs=<SEED_ID>&relay=<RELAY>
+magnetk:?xt=urn:sha256:<HASH>&dn=<NAME>&xs=<SEED_ID>&relay=<RELAY>
 
 ┌────────────────────────────────────────────────────────────┐
-│  magnet:?xt=urn:sha256:a1b2c3d4...                        │
+│  magnetk:?xt=urn:sha256:a1b2c3d4...                       │
 │          &dn=awesome-file.zip                              │
 │          &xs=Qm1234567890abcdef...                        │
-│          &relay=relay.magnet.io:4001                       │
+│          &relay=relay.magnetk.io:4001                      │
 └────────────────────────────────────────────────────────────┘
         │           │           │              │
         ▼           ▼           ▼              ▼
-   File Hash   Filename    Seed Peer     Required Relay
+    File Hash   Filename    Seed Peer     Required Relay
 ```
 
 ---
@@ -108,10 +108,10 @@ magnet:?xt=urn:sha256:<HASH>&dn=<NAME>&xs=<SEED_ID>&relay=<RELAY>
   1. PUBLISH ───────┼─────────────────────────────►│                             │
      {hash, name}   │                              │                             │
                     │◄─────────────────────────────┤                             │
-                    │   MAGNET_LINK               │                             │
+                    │   MAGNETK_LINK              │                             │
                     │                              │                             │
                     │                              │◄────────────────────────────┤
-                    │                              │   2. RESOLVE {magnet_link}  │
+                    │                              │   2. RESOLVE {magnetk_link} │
                     │                              │                             │
                     │                              │────────────────────────────►│
                     │                              │   SEED_INFO {addr}          │

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"magnet/pkg/magnet"
-	"magnet/pkg/types"
+	"magnetk/pkg/magnetk"
+	"magnetk/pkg/types"
 )
 
 // FileRegistry maintains a registry of published files and their seeds
@@ -58,7 +58,7 @@ func (r *FileRegistry) PublishFile(fileHash, fileName string, fileSize int64, ch
 	}
 
 	// Generate magnet link
-	ml := magnet.New(fileHash, fileName, seedInfo.PeerID, r.relayAddr, fileSize)
+	ml := magnetk.New(fileHash, fileName, seedInfo.PeerID, r.relayAddr, fileSize)
 	return ml.String()
 }
 

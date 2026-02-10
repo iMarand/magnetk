@@ -7,7 +7,7 @@ A peer-to-peer file transfer network using **libp2p + QUIC** with automatic resu
 - ✅ **Decentralized**: Direct P2P transfers with no central storage server.
 - ✅ **Resume Support**: Transfers automatically resume after network interruptions.
 - ✅ **QUIC Transport**: High-performance UDP-based connections (via MsQuic) for low latency.
-- ✅ **Magnet Links**: Share files easily using standard magnet link format.
+- ✅ **Magnetk Links**: Share files easily using standard magnetk link format.
 - ✅ **Offline Buffering**: Intermediary relays buffer chunks for offline peers.
 - ✅ **Cross-Platform SDKs**: Easy integration for Go, JavaScript/Node.js, and C++.
 
@@ -59,7 +59,7 @@ seed a file and get a magnet link.
 ### 3. Download (Peer)
 Use the magnet link to download the file.
 ```bash
-./bin/peer --magnet "magnet:?xt=urn:sha256:..." --output ./download.zip
+./bin/peer --magnetk "magnetk:?xt=urn:sha256:..." --output ./download.zip
 ```
 
 ## 📚 Documentation
@@ -70,9 +70,10 @@ For detailed guides on SDKs, architecture, and advanced configuration, see:
 
 ## 🔧 SDKs
 
-- **Go SDK**: `sdk/go/magnet` - High performance, native integration.
-- **JavaScript SDK**: `sdk/js/magnet` - Web/Node.js integration.
+- **Go SDK**: `sdk/go/magnetk` - High performance, native integration.
+- **JavaScript SDK**: `sdk/js/magnetk` - Web/Node.js integration.
 - **C++ SDK**: `sdk/cpp` - Low-level/Embedded integration.
+- **Python SDK**: `sdk/python/magnetk` - Scripting & Automation.
 
 ## License
 MIT

@@ -1,5 +1,5 @@
-// Package magnet provides utilities for creating and parsing magnet links
-package magnet
+// package magnetk provides utilities for creating and parsing magnet links
+package magnetk
 
 import (
 	"fmt"
@@ -18,11 +18,11 @@ type MagnetLink struct {
 
 // Parse parses a magnet link string into a MagnetLink struct
 func Parse(magnetURI string) (*MagnetLink, error) {
-	if !strings.HasPrefix(magnetURI, "magnet:?") {
-		return nil, fmt.Errorf("invalid magnet link: must start with 'magnet:?'")
+	if !strings.HasPrefix(magnetURI, "magnetk:?") {
+		return nil, fmt.Errorf("invalid magnet link: must start with 'magnetk:?'")
 	}
 
-	query := strings.TrimPrefix(magnetURI, "magnet:?")
+	query := strings.TrimPrefix(magnetURI, "magnetk:?")
 	params, err := url.ParseQuery(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse magnet link: %w", err)
@@ -82,7 +82,7 @@ func (ml *MagnetLink) String() string {
 	// relay is required for Magnet network
 	params.Set("relay", ml.RelayAddr)
 
-	return "magnet:?" + params.Encode()
+	return "magnetk:?" + params.Encode()
 }
 
 // New creates a new MagnetLink

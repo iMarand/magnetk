@@ -7,7 +7,7 @@
 
 import net from 'net';
 import fs from 'fs';
-import { MagnetLink } from './magnet.js';
+import { MagnetkLink } from './magnetk.js';
 
 const MSG_TYPE = {
     MSG_MANIFEST_REQ: 0x10,
@@ -17,7 +17,7 @@ const MSG_TYPE = {
     MSG_ERROR: 0xFF
 };
 
-export class MagnetClient {
+export class MagnetkClient {
     constructor(config = {}) {
         this.config = config;
         this.connections = new Map();
@@ -32,24 +32,24 @@ export class MagnetClient {
     connect(host, port) {
         return new Promise((resolve, reject) => {
             const socket = net.createConnection(port, host, () => {
-                console.log(`[JS-SDK] Connected to ${host}:${port}`);
+                console.log(`[Magnetk-JS] Connected to ${host}:${port}`);
                 resolve(socket);
             });
             socket.on('error', (err) => {
-                console.error(`[JS-SDK] Connection error: ${err.message}`);
+                console.error(`[Magnetk-JS] Connection error: ${err.message}`);
                 reject(err);
             });
         });
     }
 
     /**
-     * Downloads a file from a magnet link.
+     * Downloads a file from a magnetk link.
      * @param {string} magnetURI 
      * @param {string} outputPath 
      */
     async download(magnetURI, outputPath) {
-        const ml = MagnetLink.parse(magnetURI);
-        console.log(`[JS-SDK] Starting download for: ${ml.fileName}`);
+        const ml = MagnetkLink.parse(magnetURI);
+        console.log(`[Magnetk-JS] Starting download for: ${ml.fileName}`);
 
         // TODO: Resolve seed address from relay. For now, assume localhost:4002 (TCP fallback if implemented)
         // or just connect to the seed's TCP discovery port if implemented.
@@ -60,7 +60,7 @@ export class MagnetClient {
         const seedHost = '127.0.0.1';
         const seedPort = 4002; // Assuming this port also accepts TCP? (In reality Go code uses MsQuic UDP)
 
-        console.log(`[JS-SDK] Warning: TCP download not fully supported by Go seed (UDP-only). Protocol checks only.`);
+        console.log(`[Magnetk-JS] Warning: TCP download not fully supported by Go seed (UDP-only). Protocol checks only.`);
 
         // Send manifest request to demonstrate protocol framing
         /*
@@ -75,7 +75,7 @@ export class MagnetClient {
         const frame = await reader.readFrame();
         if (frame.type === MSG_TYPE.MSG_MANIFEST_RES) {
             const manifest = JSON.parse(frame.payload.toString());
-            console.log(`[JS-SDK] Received manifest: ${manifest.file_name}, ${manifest.total_chunks} chunks`);
+            console.log(`[Magnetk-JS] Received manifest: ${manifest.file_name}, ${manifest.total_chunks} chunks`);
         }
         
         socket.end();

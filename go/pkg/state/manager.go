@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // Manager handles state persistence for transfer resume

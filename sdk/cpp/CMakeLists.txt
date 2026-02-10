@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(magnet_cpp_sdk CXX)
+project(magnetk_cpp_sdk CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -11,25 +11,25 @@ set(MSQUIC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../msquic")
 add_subdirectory("${MAGNET_C_DIR}" bin_c_transport)
 
 # C++ SDK Library
-add_library(magnet_cpp STATIC
-    src/magnet_link.cpp
+add_library(magnetk_cpp STATIC
+    src/magnetk_link.cpp
     src/client.cpp
     src/seed.cpp
 )
 
-target_include_directories(magnet_cpp PUBLIC
+target_include_directories(magnetk_cpp PUBLIC
     include
     ${MAGNET_C_DIR}/include
     ${MSQUIC_ROOT}/src/inc
 )
 
-target_link_libraries(magnet_cpp PUBLIC
-    magnet_transport
+target_link_libraries(magnetk_cpp PUBLIC
+    magnetk_transport
 )
 
 # Test Executable
 add_executable(test_sdk test/test_sdk.cpp)
-target_link_libraries(test_sdk PRIVATE magnet_cpp)
+target_link_libraries(test_sdk PRIVATE magnetk_cpp)
 
 if(WIN32)
     # Ensure MsQuic DLL is copied

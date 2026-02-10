@@ -1,4 +1,4 @@
-// Seed node for the Magnet P2P network.
+// Seed node for the Magnetk P2P network.
 //
 // The seed hosts files and serves chunks to requesting peers:
 // - Connects to relay via libp2p for discovery/registration
@@ -28,11 +28,11 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 
-	"magnet/pkg/chunk"
-	"magnet/pkg/config"
-	magnetLink "magnet/pkg/magnet"
-	"magnet/pkg/protocol"
-	"magnet/pkg/transport"
+	"magnetk/pkg/chunk"
+	"magnetk/pkg/config"
+	magnetkLink "magnetk/pkg/magnetk"
+	"magnetk/pkg/protocol"
+	"magnetk/pkg/transport"
 )
 
 func main() {
@@ -57,7 +57,7 @@ func main() {
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
-	fmt.Println("║         MAGNET P2P SEED NODE                 ║")
+	fmt.Println("║         MAGNETK P2P SEED NODE                 ║")
 	fmt.Println("║         Hybrid MsQuic + libp2p              ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
@@ -97,7 +97,7 @@ func main() {
 		BindAddress:       cfg.EffectiveBindAddress(),
 		Port:              uint16(cfg.TransportPort),
 		NoCertValidation:  cfg.NoCertValidation,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    uint32(cfg.MaxConnections),
 		IdleTimeoutMs:     60000,
 		SendBufferSize:    cfg.SendBufferSizeBytes(),
@@ -167,7 +167,7 @@ func main() {
 	}
 
 	// Generate magnet link
-	ml := &magnetLink.MagnetLink{
+	ml := &magnetkLink.MagnetLink{
 		FileHash:  manifest.FileHash,
 		FileName:  filepath.Base(*filePath),
 		FileSize:  manifest.FileSize,
@@ -180,7 +180,7 @@ func main() {
 	fmt.Println("║  FILE PUBLISHED SUCCESSFULLY!                ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
-	fmt.Printf("  Magnet Link: %s\n\n", ml.String())
+	fmt.Printf("  Magnetk Link: %s\n\n", ml.String())
 	fmt.Println("  Share this link to allow others to download!")
 	fmt.Println()
 

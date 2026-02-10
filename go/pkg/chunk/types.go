@@ -2,7 +2,7 @@
 package chunk
 
 import (
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // FileManifest is an alias for types.FileManifest for convenient importing

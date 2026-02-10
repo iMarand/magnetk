@@ -8,7 +8,7 @@ The Go SDK provides the most complete implementation, supporting both seeding an
 
 ### Installation
 ```bash
-go get github.com/iMarand/magnetk/sdk/go/magnet
+go get github.com/iMarand/magnetk/sdk/go/magnetk
 ```
 
 ### Hosting a File (Seed)
@@ -17,7 +17,7 @@ package main
 
 import (
     "fmt"
-    "github.com/iMarand/magnetk/sdk/go/magnet"
+    "github.com/iMarand/magnetk/sdk/go/magnetk"
 )
 
 func main() {
@@ -46,7 +46,7 @@ func main() {
 
 ### Downloading a File (Client)
 ```go
-import "github.com/iMarand/magnetk/sdk/go/magnet"
+import "github.com/iMarand/magnetk/sdk/go/magnetk"
 
 client, _ := magnetk.NewClient(magnetk.ClientConfig{})
 err := client.Download(magnetLink, "./downloads/", func(p magnetk.Progress) {
@@ -62,7 +62,7 @@ The JS SDK supports connecting to the Magnetk network using TCP. It implements t
 
 ### Installation
 ```bash
-cd sdk/js/magnet
+cd sdk/js/magnetk
 npm install
 ```
 
@@ -73,7 +73,7 @@ import { MagnetkClient, MagnetkLink } from 'magnetk-sdk-js';
 const client = new MagnetkClient();
 
 // Connect and download (metadata only for now without C++ bindings)
-await client.download('magnet:?xt=urn:sha256:...', './output');
+await client.download('magnetk:?xt=urn:sha256:...', './output');
 ```
 
 ---
@@ -97,7 +97,7 @@ int main() {
     magnetk::Client client;
     
     client.download(
-        "magnet:?xt=urn:sha256:...", 
+        "magnetk:?xt=urn:sha256:...", 
         "./output.dat",
         [](const magnetk::Progress& p) {
             std::cout << p.percent << "%" << std::endl;

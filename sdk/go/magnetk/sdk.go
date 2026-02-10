@@ -1,4 +1,4 @@
-// Package magnet provides the Go SDK for the Magnet P2P file transfer system.
+// package magnetk provides the Go SDK for the Magnet P2P file transfer system.
 //
 // The SDK provides two main types:
 //   - Seed: for hosting and sharing files
@@ -9,7 +9,7 @@
 //
 // Quick Start - Hosting a file:
 //
-//	seed, err := magnet.NewSeed(magnet.SeedConfig{
+//	seed, err := magnetk.NewSeed(magnetk.SeedConfig{
 //	    RelayAddr:     "/ip4/1.2.3.4/tcp/4001/p2p/<relay_id>",
 //	    TransportPort: 4002,
 //	})
@@ -19,12 +19,12 @@
 //
 // Quick Start - Downloading a file:
 //
-//	client, err := magnet.NewClient(magnet.ClientConfig{})
+//	client, err := magnetk.NewClient(magnetk.ClientConfig{})
 //	err = client.Download(magnetLink, "./downloads/", func(p magnet.Progress) {
 //	    fmt.Printf("%.1f%%\n", p.Percent)
 //	})
 //	defer client.Close()
-package magnet
+package magnetk
 
 import (
 	"encoding/json"
@@ -36,13 +36,13 @@ import (
 	"sync"
 	"time"
 
-	"magnet/pkg/chunk"
-	"magnet/pkg/config"
-	magnetLink "magnet/pkg/magnet"
-	"magnet/pkg/protocol"
-	"magnet/pkg/state"
-	"magnet/pkg/transport"
-	"magnet/pkg/types"
+	"magnetk/pkg/chunk"
+	"magnetk/pkg/config"
+	magnetLink "magnetk/pkg/magnetk"
+	"magnetk/pkg/protocol"
+	"magnetk/pkg/state"
+	"magnetk/pkg/transport"
+	"magnetk/pkg/types"
 )
 
 // ===== Configuration =====
@@ -128,7 +128,7 @@ func NewSeed(seedCfg SeedConfig) (*Seed, error) {
 		BindAddress:       cfg.EffectiveBindAddress(),
 		Port:              uint16(cfg.TransportPort),
 		NoCertValidation:  cfg.NoCertValidation,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    uint32(cfg.MaxConnections),
 		IdleTimeoutMs:     60000,
 		SendBufferSize:    cfg.SendBufferSizeBytes(),
@@ -177,7 +177,7 @@ func (s *Seed) PublishFile(filePath string) (string, error) {
 	}
 
 	// Create magnet link
-	ml := &magnetLink.MagnetLink{
+	ml := &magnetkLink.MagnetLink{
 		FileHash:  manifest.FileHash,
 		FileName:  filepath.Base(filePath),
 		FileSize:  manifest.FileSize,
@@ -331,7 +331,7 @@ func (c *Client) Download(magnetURI string, outputDir string, onProgress Progres
 	c.mu.Unlock()
 
 	// Parse magnet link
-	ml, err := magnetLink.Parse(magnetURI)
+	ml, err := magnetkLink.Parse(magnetURI)
 	if err != nil {
 		return fmt.Errorf("parse magnet link: %w", err)
 	}
@@ -352,7 +352,7 @@ func (c *Client) Download(magnetURI string, outputDir string, onProgress Progres
 		BindAddress:       c.cfg.EffectiveBindAddress(),
 		Port:              0, // Any port
 		NoCertValidation:  c.cfg.NoCertValidation,
-		ALPN:              "magnet",
+		ALPN:              "magnetk",
 		MaxConnections:    uint32(c.cfg.MaxConnections),
 		IdleTimeoutMs:     60000,
 		SendBufferSize:    c.cfg.SendBufferSizeBytes(),
@@ -520,6 +520,6 @@ func (c *Client) Close() {
 }
 
 // ParseMagnetLink parses a magnet URI string.
-func ParseMagnetLink(uri string) (*magnetLink.MagnetLink, error) {
-	return magnetLink.Parse(uri)
+func ParseMagnetLink(uri string) (*magnetkLink.MagnetLink, error) {
+	return magnetkLink.Parse(uri)
 }

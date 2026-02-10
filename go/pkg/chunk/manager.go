@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"magnet/pkg/types"
+	"magnetk/pkg/types"
 )
 
 // Manager handles chunk operations for files
