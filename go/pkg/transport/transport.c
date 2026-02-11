@@ -299,20 +299,17 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
     cred_config.CertificateContext = (QUIC_CERTIFICATE*)t->cert_context;
 #else
     QUIC_CERTIFICATE_FILE cert_file = {0};
-    if (config->cert_file && config->key_file) {
+    
+    /* For self-signed certs in dev mode, use NONE type to bypass validation */
+    if (config->cert_file && config->key_file && !config->no_cert_validation) {
+        /* Production mode with real certs */
         cert_file.CertificateFile = config->cert_file;
         cert_file.PrivateKeyFile = config->key_file;
         cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
         cred_config.CertificateFile = &cert_file;
-
-        cred_config.Flags = QUIC_CREDENTIAL_FLAG_NONE;  /* ADD THIS LINE */
-        
-        /* Also set validation flag if needed */
-        if (config->no_cert_validation) {
-            cred_config.Flags |= QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
-        }
+        cred_config.Flags = QUIC_CREDENTIAL_FLAG_NONE;
     } else {
-        /* Self-signed / no cert (for development) */
+        /* Development mode - use NONE to allow self-signed */
         cred_config.Type = QUIC_CREDENTIAL_TYPE_NONE;
         cred_config.Flags = QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
     }
