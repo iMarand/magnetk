@@ -84,17 +84,54 @@ export class MagnetkClient {
         const ml = MagnetkLink.parse(magnetURI);
         console.log(`[Magnetk-JS] Starting download for: ${ml.fileName}`);
 
-        // 1. Resolve seed address from the Magnetk Link
-        // For now, the link contains the relay address. In a full system, 
-        // we'd query the relay for seeds. For this demo, we assume the seed 
-        // is at the same host as the relay's TCP discovery port (simplified).
-        // The user manually provided the relay IP.
-        const seedHost = ml.relayAddr.split('/')[2];
-        const seedPort = 4002; // Transport port (TCP fallback)
+        // 1. Resolve seed address from the Relay
+        // We extract the relay host from the Magnetk Link
+        const relayHost = ml.relayAddr.split('/')[2];
+        const discoveryPort = 4003; // New TCP discovery port on relay
+
+        console.log(`[Magnetk-JS] Querying relay ${relayHost}:${discoveryPort} for seeds...`);
+        let lookupResult;
+        try {
+            lookupResult = await this.lookupPeer(relayHost, discoveryPort, ml.fileHash);
+        } catch (e) {
+            console.error(`[Magnetk-JS] Initial lookup failed: ${e.message}`);
+            console.log(`[Magnetk-JS] Attempting fallback to direct connection...`);
+        }
+
+        let seedHost = relayHost; // Default to relay as fallback (unlikely to work for data)
+        let seedPort = 4002;
+
+        if (lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
+            const seed = lookupResult.seeds[0];
+            console.log(`[Magnetk-JS] Found seed: ${seed.peer_id}`);
+
+            if (seed.transport_addr) {
+                const parts = seed.transport_addr.split(':');
+                seedHost = parts[0];
+                seedPort = parseInt(parts[1], 10) || 4002;
+            }
+        }
+
+        // SPECIAL CASE for local testing:
+        // If the seed host is exactly the same as the relay host, and the connection refused,
+        // it's likely because the seeder is actually LOCAL to the user's PC.
+        // We'll try to connect to localhost if the direct connection fails.
 
         console.log(`[Magnetk-JS] Connecting to seed at ${seedHost}:${seedPort} (TCP)...`);
 
-        const socket = await this.connect(seedHost, seedPort);
+        let socket;
+        try {
+            socket = await this.connect(seedHost, seedPort);
+        } catch (e) {
+            if (seedHost !== '127.0.0.1' && seedHost !== 'localhost') {
+                console.log(`[Magnetk-JS] Connection to ${seedHost} failed. Trying LOCALHOST fallback for development...`);
+                socket = await this.connect('127.0.0.1', 4002);
+                seedHost = '127.0.0.1';
+            } else {
+                throw e;
+            }
+        }
+
         const writer = new FrameWriter(socket);
         const reader = new FrameReader(socket);
 

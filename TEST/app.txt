@@ -1,7 +1,1 @@
-Magnetk P2P Test File
---------------------
-This is a simple app.txt file used to test the Magnetk P2P File Transfer system.
-It will be seeded from the local machine and announced to the relay on the VPS.
-Relay: 69.169.109.243
-Time: 2026-02-11
-Status: Testing Discovery and Download via JS SDK
+Snap

@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node test.js",
     "lookup": "node lookup.js",
-    "download": "node download.js"
+    "download": "node download.js",
+    "seed": "node seed.js"
   },
   "dependencies": {
     "ws": "^8.13.0"

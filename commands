@@ -8,3 +8,11 @@ bin\relay.exe -port 4001
 @REM Build realse version
 
 copy D:\More_Projects\Projects\Magnetk\msquic\artifacts\bin\windows\x64_Debug_schannel\msquic.dll D:\More_Projects\Projects\Magnetk\bin\
+
+
+cd ~/Desktop/Magnetk/magnetk/go
+go build -o ../bin/relay ./cmd/relay
+
+cd ~/Desktop/Magnetk/magnetk
+export LD_LIBRARY_PATH=$PWD/bin:$LD_LIBRARY_PATH
+./bin/relay
