@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -133,6 +134,25 @@ func main() {
 	defer listener.Close()
 
 	log.Printf("[relay] MsQuic data listener started on port %d", cfg.TransportPort)
+
+	// ===== 4.5 Start TCP discovery fallback for JS SDK =====
+	go func() {
+		tcpDiscPort := cfg.DiscoveryPort + 2
+		tcpAddr := fmt.Sprintf("%s:%d", cfg.EffectiveBindAddress(), tcpDiscPort)
+		l, err := net.Listen("tcp", tcpAddr)
+		if err != nil {
+			log.Printf("[relay] Error starting TCP discovery fallback: %v", err)
+			return
+		}
+		log.Printf("[relay] TCP discovery fallback listening on %s (for JS SDK)", tcpAddr)
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				continue
+			}
+			go relayHandler.HandleTCPDiscovery(conn)
+		}
+	}()
 
 	// ===== 5. Start stats printer =====
 	go printStats(reg, h)

@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -319,13 +320,82 @@ func serveChunkRequest(
 
 // publishToRelay registers the file with the relay via libp2p discovery stream
 func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config) error {
-	// This uses the existing libp2p discovery stream to register
-	// The actual implementation forwards to the relay handler
-	log.Printf("[seed] Publishing %s to relay (%d chunks)", filepath.Base(filePath), manifest.TotalChunks)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s, err := h.NewStream(ctx, relayID, protocol.DiscoveryProtocolID)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	payload := protocol.LegacyPublishFilePayload{
+		PeerID:     h.ID().String(),
+		FileHash:   manifest.FileHash,
+		FileName:   filepath.Base(filePath),
+		FileSize:   manifest.FileSize,
+		ChunkCount: manifest.TotalChunks,
+		// Advertise our MsQuic transport address
+		Addresses: []string{fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.TransportPort)},
+	}
+
+	msg, err := protocol.NewMessage(protocol.LegacyMsgPublishFile, payload)
+	if err != nil {
+		return err
+	}
+
+	data, _ := msg.Encode()
+	writer := bufio.NewWriter(s)
+	writer.Write(data)
+	writer.WriteByte('\n')
+	writer.Flush()
+
+	// Wait for Ack
+	reader := bufio.NewReader(s)
+	ackData, err := reader.ReadBytes('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read publish ack: %w", err)
+	}
+
+	ackMsg, err := protocol.DecodeMessage(ackData)
+	if err != nil {
+		return fmt.Errorf("failed to decode publish ack: %w", err)
+	}
+
+	if ackMsg.Type == protocol.LegacyMsgError {
+		var errorPayload protocol.LegacyErrorPayload
+		ackMsg.ParsePayload(&errorPayload)
+		return fmt.Errorf("relay error: %s", errorPayload.Message)
+	}
+
+	log.Printf("[seed] Published successfully to relay.")
 	return nil
 }
 
 func sendHeartbeat(h host.Host, relayID peer.ID) error {
-	// Heartbeat via libp2p
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	s, err := h.NewStream(ctx, relayID, protocol.DiscoveryProtocolID)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	payload := protocol.LegacyHeartbeatPayload{
+		PeerID: h.ID().String(),
+	}
+
+	msg, err := protocol.NewMessage(protocol.LegacyMsgHeartbeat, payload)
+	if err != nil {
+		return err
+	}
+
+	data, _ := msg.Encode()
+	writer := bufio.NewWriter(s)
+	writer.Write(data)
+	writer.WriteByte('\n')
+	writer.Flush()
+
 	return nil
 }

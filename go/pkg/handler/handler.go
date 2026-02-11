@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -92,6 +94,82 @@ func (rh *RelayHandler) handleDiscovery(s network.Stream) {
 		writer.WriteByte('\n')
 		writer.Flush()
 	}
+}
+
+// HandleTCPDiscovery handles discovery protocol over raw TCP (fallback for JS SDK)
+func (rh *RelayHandler) HandleTCPDiscovery(conn net.Conn) {
+	defer conn.Close()
+
+	reader := protocol.NewFrameReader(conn)
+	writer := protocol.NewFrameWriter(conn)
+
+	for {
+		frame, err := reader.ReadFrame()
+		if err != nil {
+			if err != io.EOF {
+				fmt.Printf("[relay] TCP discovery error: %v\n", err)
+			}
+			return
+		}
+
+		switch frame.Type {
+		case protocol.MsgLookupPeer:
+			var payload protocol.LookupPeerPayload
+			if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+				writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+					Code:    protocol.ErrCodeInvalidRequest,
+					Message: "Invalid payload",
+				})
+				continue
+			}
+			rh.handleTCPMsgLookupPeer(payload, writer)
+
+		case protocol.MsgHeartbeat:
+			// Heartbeat for TCP clients
+			writer.WriteJSON(protocol.MsgHeartbeatAck, protocol.HeartbeatPayload{Timestamp: time.Now().Unix()})
+
+		default:
+			writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+				Code:    protocol.ErrCodeInvalidRequest,
+				Message: "Unsupported message type in TCP fallback",
+			})
+		}
+	}
+}
+
+func (rh *RelayHandler) handleTCPMsgLookupPeer(payload protocol.LookupPeerPayload, writer *protocol.FrameWriter) {
+	entry, found := rh.registry.LookupFile(payload.FileHash)
+	if !found {
+		writer.WriteJSON(protocol.MsgLookupResult, protocol.LookupResultPayload{
+			Seeds: []protocol.SeedInfo{},
+		})
+		return
+	}
+
+	seeds := make([]protocol.SeedInfo, 0, len(entry.Seeds))
+	for _, s := range entry.Seeds {
+		// Try to find the MsQuic address in s.Addresses
+		transportAddr := ""
+		for _, addr := range s.Addresses {
+			if strings.Contains(addr, "/quic-v1") {
+				parts := strings.Split(addr, "/")
+				if len(parts) >= 5 {
+					transportAddr = fmt.Sprintf("%s:%s", parts[2], parts[4])
+				}
+				break
+			}
+		}
+
+		seeds = append(seeds, protocol.SeedInfo{
+			PeerID:        s.PeerID,
+			Addresses:     s.Addresses,
+			TransportAddr: transportAddr,
+		})
+	}
+
+	writer.WriteJSON(protocol.MsgLookupResult, protocol.LookupResultPayload{
+		Seeds: seeds,
+	})
 }
 
 func (rh *RelayHandler) handleRegisterPeer(msg *protocol.Message, peerID peer.ID) *protocol.Message {

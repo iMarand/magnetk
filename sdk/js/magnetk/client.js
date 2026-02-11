@@ -10,6 +10,8 @@ import fs from 'fs';
 import { MagnetkLink } from './magnetk.js';
 
 const MSG_TYPE = {
+    MSG_LOOKUP_PEER: 0x03,
+    MSG_LOOKUP_RESULT: 0x04,
     MSG_MANIFEST_REQ: 0x10,
     MSG_MANIFEST_RES: 0x11,
     MSG_CHUNK_REQ: 0x20,
@@ -43,6 +45,37 @@ export class MagnetkClient {
     }
 
     /**
+     * Look up seeds for a file hash from the relay.
+     * @param {string} relayHost 
+     * @param {number} relayPort 
+     * @param {string} fileHash 
+     * @returns {Promise<Object>}
+     */
+    async lookupPeer(relayHost, relayPort, fileHash) {
+        console.log(`[Magnetk-JS] Looking up seeds for ${fileHash.substring(0, 10)} on relay ${relayHost}:${relayPort}...`);
+        const socket = await this.connect(relayHost, relayPort);
+        const writer = new FrameWriter(socket);
+        const reader = new FrameReader(socket);
+
+        try {
+            await writer.writeJSON(MSG_TYPE.MSG_LOOKUP_PEER, { file_hash: fileHash });
+            const frame = await reader.readFrame();
+
+            if (frame.type === MSG_TYPE.MSG_LOOKUP_RESULT) {
+                const result = JSON.parse(frame.payload.toString());
+                return result;
+            } else if (frame.type === MSG_TYPE.MSG_ERROR) {
+                const err = JSON.parse(frame.payload.toString());
+                throw new Error(`Relay error: ${err.message}`);
+            } else {
+                throw new Error(`Unexpected response type: 0x${frame.type.toString(16)}`);
+            }
+        } finally {
+            socket.end();
+        }
+    }
+
+    /**
      * Downloads a file from a magnetk link.
      * @param {string} magnetURI 
      * @param {string} outputPath 
@@ -51,36 +84,68 @@ export class MagnetkClient {
         const ml = MagnetkLink.parse(magnetURI);
         console.log(`[Magnetk-JS] Starting download for: ${ml.fileName}`);
 
-        // TODO: Resolve seed address from relay. For now, assume localhost:4002 (TCP fallback if implemented)
-        // or just connect to the seed's TCP discovery port if implemented.
-        // Since Go uses MsQuic for data transfer (UDP), purely TCP JS client can't fetch data 
-        // unless I implement a TCP data listener on Go side.
+        // 1. Resolve seed address from the Magnetk Link
+        // For now, the link contains the relay address. In a full system, 
+        // we'd query the relay for seeds. For this demo, we assume the seed 
+        // is at the same host as the relay's TCP discovery port (simplified).
+        // The user manually provided the relay IP.
+        const seedHost = ml.relayAddr.split('/')[2];
+        const seedPort = 4002; // Transport port (TCP fallback)
 
-        // For this demo, let's assume the seed also listens on TCP for development/fallback.
-        const seedHost = '127.0.0.1';
-        const seedPort = 4002; // Assuming this port also accepts TCP? (In reality Go code uses MsQuic UDP)
+        console.log(`[Magnetk-JS] Connecting to seed at ${seedHost}:${seedPort} (TCP)...`);
 
-        console.log(`[Magnetk-JS] Warning: TCP download not fully supported by Go seed (UDP-only). Protocol checks only.`);
-
-        // Send manifest request to demonstrate protocol framing
-        /*
         const socket = await this.connect(seedHost, seedPort);
         const writer = new FrameWriter(socket);
         const reader = new FrameReader(socket);
 
-        // Request manifest
-        await writer.writeJSON(MSG_TYPE.MSG_MANIFEST_REQ, { file_hash: ml.fileHash });
-        
-        // Read response
-        const frame = await reader.readFrame();
-        if (frame.type === MSG_TYPE.MSG_MANIFEST_RES) {
-            const manifest = JSON.parse(frame.payload.toString());
-            console.log(`[Magnetk-JS] Received manifest: ${manifest.file_name}, ${manifest.total_chunks} chunks`);
+        try {
+            // STEP 1: Request manifest
+            console.log(`[Magnetk-JS] Requesting manifest for ${ml.fileHash.substring(0, 10)}...`);
+            await writer.writeJSON(MSG_TYPE.MSG_MANIFEST_REQ, { file_hash: ml.fileHash });
+
+            const manifestFrame = await reader.readFrame();
+            if (manifestFrame.type !== MSG_TYPE.MSG_MANIFEST_RES) {
+                throw new Error(`Unexpected manifest response type: 0x${manifestFrame.type.toString(16)}`);
+            }
+
+            const manifest = JSON.parse(manifestFrame.payload.toString());
+            console.log(`[Magnetk-JS] Manifest received: ${manifest.file_name}, ${manifest.total_chunks} chunks, total size: ${manifest.file_size} bytes`);
+
+            // STEP 2: Prepare output file
+            const fd = fs.openSync(outputPath, 'w');
+
+            // STEP 3: Request and write chunks
+            for (let i = 0; i < manifest.total_chunks; i++) {
+                process.stdout.write(`\r[Magnetk-JS] Downloading chunk ${i + 1}/${manifest.total_chunks}...`);
+
+                await writer.writeJSON(MSG_TYPE.MSG_CHUNK_REQ, {
+                    file_hash: ml.fileHash,
+                    chunk_indices: [i]
+                });
+
+                const chunkFrame = await reader.readFrame();
+                if (chunkFrame.type !== MSG_TYPE.MSG_CHUNK_RES) {
+                    throw new Error(`Unexpected chunk response type: 0x${chunkFrame.type.toString(16)}`);
+                }
+
+                // Chunk payload format: [4 bytes: index][raw data]
+                const index = chunkFrame.payload.readUInt32BE(0);
+                const data = chunkFrame.payload.slice(4);
+
+                // Write to file at correct offset
+                const offset = i * manifest.chunk_size;
+                fs.writeSync(fd, data, 0, data.length, offset);
+            }
+
+            fs.closeSync(fd);
+            console.log(`\n[Magnetk-JS] ✓ Download complete: ${outputPath}`);
+
+        } catch (err) {
+            console.error(`[Magnetk-JS] Download failed: ${err.message}`);
+            throw err;
+        } finally {
+            socket.end();
         }
-        
-        socket.end();
-        */
-        return;
     }
 }
 
@@ -90,14 +155,11 @@ class FrameWriter {
     }
 
     async writeFrame(type, payload) {
-        const len = Buffer.alloc(4);
-        len.writeUInt32BE(payload.length);
+        const header = Buffer.alloc(5);
+        header.writeUInt32BE(payload.length, 0);
+        header.writeUInt8(type, 4);
 
-        const typeBuf = Buffer.alloc(1);
-        typeBuf.writeUInt8(type);
-
-        this.socket.write(len);
-        this.socket.write(typeBuf);
+        this.socket.write(header);
         this.socket.write(payload);
     }
 
@@ -111,26 +173,40 @@ class FrameReader {
     constructor(socket) {
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
+        this.pendingResolve = null;
+        this.socket.on('data', (chunk) => this._onData(chunk));
+    }
+
+    _onData(chunk) {
+        this.buffer = Buffer.concat([this.buffer, chunk]);
+        this._tryResolve();
+    }
+
+    _tryResolve() {
+        if (!this.pendingResolve) return;
+
+        if (this.buffer.length >= 5) {
+            const len = this.buffer.readUInt32BE(0);
+            const type = this.buffer.readUInt8(4);
+
+            if (this.buffer.length >= 5 + len) {
+                const payload = this.buffer.slice(5, 5 + len);
+                this.buffer = this.buffer.slice(5 + len);
+
+                const resolve = this.pendingResolve;
+                this.pendingResolve = null;
+                resolve({ type, payload });
+
+                // Try again for any buffered data
+                this._tryResolve();
+            }
+        }
     }
 
     readFrame() {
-        return new Promise((resolve, reject) => {
-            const onData = (chunk) => {
-                this.buffer = Buffer.concat([this.buffer, chunk]);
-
-                if (this.buffer.length >= 5) {
-                    const len = this.buffer.readUInt32BE(0);
-                    const type = this.buffer.readUInt8(4);
-
-                    if (this.buffer.length >= 5 + len) {
-                        const payload = this.buffer.slice(5, 5 + len);
-                        this.buffer = this.buffer.slice(5 + len);
-                        this.socket.removeListener('data', onData);
-                        resolve({ type, payload });
-                    }
-                }
-            };
-            this.socket.on('data', onData);
+        return new Promise((resolve) => {
+            this.pendingResolve = resolve;
+            this._tryResolve();
         });
     }
 }

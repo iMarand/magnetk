@@ -1,0 +1,20 @@
+{
+  "name": "magnetk-sdk-js",
+  "version": "2.0.0",
+  "description": "JavaScript SDK for Magnetk P2P File Transfer System",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test.js",
+    "lookup": "node lookup.js",
+    "download": "node download.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0"
+  },
+  "devDependencies": {
+    "minimist": "^1.2.8"
+  },
+  "author": "",
+  "license": "MIT"
+}

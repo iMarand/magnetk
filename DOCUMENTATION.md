@@ -98,18 +98,33 @@ client.download("magnetk:?xt=...", "./out.dat");
 ---
 
 ## 3. Performance & Architecture
-
+ 
+### Hybrid Protocol Architecture
+Magnetk uses a hybrid approach to balance extreme performance with universal compatibility.
+ 
+| Job | Protocol | Port | Used By | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Discovery** | TCP (LibP2P) | 4001 | Go/Python Nodes | COORDINATION: Registry & peer routing. |
+| **JS Discovery**| TCP (Raw) | 4003 | JS SDK | COORDINATION: Fallback for lighter clients. |
+| **Data (Fast)** | **QUIC (UDP)**| 4002 | Go/Python/C++ | TRANSFER: High-speed, 0-RTT, parallel. |
+| **Data (JS)** | TCP (Raw) | 4002 | JS SDK | TRANSFER: Cross-platform fallback. |
+ 
+### Why QUIC + UDP?
+High-speed SDKs (Go, Python, C++) use **MsQuic** over UDP for core data transfer to avoid "Head-of-Line" blocking. This allows the system to remain fast even on high-latency or unstable networks.
+ 
+### Why TCP Fallback?
+The JavaScript SDK is designed for maximum compatibility. It uses TCP to ensure it can run in lightweight environments (Node.js, Electron) without requiring complex native driver setups, while still benefiting from the global peer discovery network.
+ 
 ### Faster File Transfers
 Magnetk P2P is faster than traditional HTTP for large files because:
-1.  **QUIC Transport**: Uses UDP to avoid Head-of-Line blocking.
-2.  **Parallel Chunking**: Downloads multiple chunks simultaneously from different peers.
-3.  **Relay Buffering**: The relay caches chunks for offline peers, smoothing out speed variations.
-
+1.  **Parallel Chunking**: Downloads multiple chunks simultaneously from different peers.
+2.  **Relay Buffering**: The relay caches chunks for offline peers, smoothing out speed variations.
+ 
 ### Comparison
 | Feature | Magnetk P2P | Classic HTTP | BitTorrent |
 | :--- | :--- | :--- | :--- |
-| Transport | QUIC (UDP) | TCP | TCP/UDP |
-| Latency | Low (0-RTT) | Medium | High |
+| Transport | QUIC (UDP) / TCP | TCP | TCP/UDP |
+| Latency | Ultra-Low (0-RTT) | Medium | High |
 | Resilience | High (Resume) | Medium | High |
 | Centralization | Semi (Relay) | Yes (Server) | No (DHT) |
 
