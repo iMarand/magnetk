@@ -14,7 +14,9 @@
 #include <stddef.h>
 
 #ifdef _WIN32
-    #ifdef MAGNETK_TRANSPORT_EXPORTS
+    #ifdef MAGNETK_STATIC
+        #define MAGNETK_API
+    #elif defined(MAGNETK_TRANSPORT_EXPORTS)
         #define MAGNETK_API __declspec(dllexport)
     #else
         #define MAGNETK_API __declspec(dllimport)

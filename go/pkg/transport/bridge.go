@@ -7,7 +7,7 @@ package transport
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../../c/include -I${SRCDIR}/../../../msquic/src/inc -DMAGNETK_STATIC
-#cgo windows LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/windows/x64_Debug_schannel -lmsquic -lws2_32
+#cgo windows LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/windows/x64_Debug_schannel -lmsquic -lws2_32 -lcrypt32 -lncrypt
 #cgo linux LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/linux/x64_Debug_openssl -lmsquic -lpthread
 #cgo darwin LDFLAGS: -L${SRCDIR}/../../../msquic/artifacts/bin/macos/x64_Debug_openssl -lmsquic -lpthread
 

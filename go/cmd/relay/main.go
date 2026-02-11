@@ -30,6 +30,9 @@ import (
 
 func main() {
 	configPath := flag.String("config", "./config/settings.conf", "Path to config file")
+	bindAddr := flag.String("bind", "", "Override bind address")
+	transportPort := flag.Int("port", 0, "Override transport port")
+	discoveryPort := flag.Int("discovery-port", 0, "Override discovery port")
 	flag.Parse()
 
 	// Load config
@@ -37,6 +40,28 @@ func main() {
 	if err != nil {
 		log.Printf("[relay] Warning: Could not load config from %s: %v (using defaults)", *configPath, err)
 		cfg = config.DefaultConfig()
+	}
+
+	// Apply overrides
+	if *bindAddr != "" {
+		cfg.BindAddress = *bindAddr
+	}
+	if *transportPort > 0 {
+		cfg.TransportPort = *transportPort
+	}
+	if *discoveryPort > 0 {
+		cfg.DiscoveryPort = *discoveryPort
+	}
+
+	// Ensure certificates exist in development mode
+	if cfg.Env == "development" && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
+		log.Println("[relay] TLS certificates not specified, generating dev certificates...")
+		cert, key, err := config.EnsureDevCertificates(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			log.Fatalf("[relay] Failed to ensure dev certificates: %v", err)
+		}
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")

@@ -25,6 +25,72 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef _WIN32
+#include <wincrypt.h>
+#include <ncrypt.h>
+
+/* Helper to generate a self-signed certificate context for Windows (SChannel fallback) */
+static void* CreateSelfSignedCertContext() {
+    CERT_NAME_BLOB subject_name_blob = {0};
+    PCCERT_CONTEXT cert_context = NULL;
+    NCRYPT_KEY_HANDLE key = (NCRYPT_KEY_HANDLE)NULL;
+    CRYPT_ALGORITHM_IDENTIFIER sig_alg = { (char*)szOID_RSA_SHA256RSA };
+    CRYPT_KEY_PROV_INFO key_prov = {0};
+    SYSTEMTIME now, expiration;
+
+    /* Prepare subject name "CN=magnetk-localhost" */
+    if (!CertStrToNameW(X509_ASN_ENCODING, L"CN=magnetk-localhost", CERT_X500_NAME_STR, NULL, NULL, &subject_name_blob.cbData, NULL)) {
+        return NULL;
+    }
+    subject_name_blob.pbData = (BYTE*)malloc(subject_name_blob.cbData);
+    if (!CertStrToNameW(X509_ASN_ENCODING, L"CN=magnetk-localhost", CERT_X500_NAME_STR, NULL, subject_name_blob.pbData, &subject_name_blob.cbData, NULL)) {
+        free(subject_name_blob.pbData);
+        return NULL;
+    }
+
+    /* Create ephemeral key pair */
+    NCRYPT_PROV_HANDLE prov = (NCRYPT_PROV_HANDLE)NULL;
+    if (NCryptOpenStorageProvider(&prov, MS_KEY_STORAGE_PROVIDER, 0) != 0) {
+        free(subject_name_blob.pbData);
+        return NULL;
+    }
+    
+    /* Use a unique container name to avoid conflicts */
+    wchar_t container_name[64];
+    swprintf(container_name, 64, L"magnetk-key-%u", (unsigned int)GetTickCount());
+
+    if (NCryptCreatePersistedKey(prov, &key, NCRYPT_RSA_ALGORITHM, container_name, 0, 0) != 0) {
+        NCryptFreeObject(prov);
+        free(subject_name_blob.pbData);
+        return NULL;
+    }
+    DWORD key_size = 2048;
+    NCryptSetProperty(key, NCRYPT_LENGTH_PROPERTY, (PBYTE)&key_size, sizeof(key_size), 0);
+    NCryptFinalizeKey(key, 0);
+
+    /* Prep key prov info */
+    key_prov.pwszContainerName = container_name;
+    key_prov.pwszProvName = (wchar_t*)MS_KEY_STORAGE_PROVIDER;
+    key_prov.dwFlags = NCRYPT_SILENT_FLAG;
+    key_prov.dwKeySpec = AT_KEYEXCHANGE;
+
+    /* Dates */
+    GetSystemTime(&now);
+    expiration = now;
+    expiration.wYear += 1;
+
+    /* Create self-signed cert */
+    cert_context = CertCreateSelfSignCertificate(key, &subject_name_blob, 0, &key_prov, &sig_alg, &now, &expiration, NULL);
+
+    /* Cleanup key/prov (they remain associated with the cert context if successful) */
+    NCryptFreeObject(key);
+    NCryptFreeObject(prov);
+    free(subject_name_blob.pbData);
+
+    return (void*)cert_context;
+}
+#endif
+
 /* ===== Internal Structures ===== */
 
 struct magnetk_transport {
@@ -35,6 +101,7 @@ struct magnetk_transport {
     magnetk_config_t         cfg;
     QUIC_BUFFER             alpn;
     char                    alpn_str[64];
+    void*                   cert_context;    /* Windows PCCERT_CONTEXT */
 };
 
 struct magnetk_listener {
@@ -209,6 +276,28 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
 
     /* Load server TLS credentials */
     QUIC_CREDENTIAL_CONFIG cred_config = {0};
+
+#ifdef _WIN32
+    if (config->cert_file && config->key_file) {
+        /* SChannel on Windows doesn't handle PEM files in QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE.
+           In a real system, we'd import them into a store or convert to PFX.
+           For Magnetk dev, we fallback to our internal self-signed generator. */
+        fprintf(stderr, "[magnetk] Warning: SChannel does not support PEM files. Using internal self-signed cert.\n");
+    }
+    
+    t->cert_context = CreateSelfSignedCertContext();
+    if (!t->cert_context) {
+        fprintf(stderr, "[magnetk] Failed to create Windows self-signed certificate.\n");
+        t->msquic->ConfigurationClose(t->config_server);
+        t->msquic->RegistrationClose(t->registration);
+        MsQuicClose(t->msquic);
+        free(t);
+        return MAGNETK_ERR_TLS;
+    }
+
+    cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_CONTEXT;
+    cred_config.CertificateContext = (QUIC_CERTIFICATE*)t->cert_context;
+#else
     if (config->cert_file && config->key_file) {
         QUIC_CERTIFICATE_FILE cert_file = {0};
         cert_file.CertificateFile = config->cert_file;
@@ -220,12 +309,16 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
         cred_config.Type = QUIC_CREDENTIAL_TYPE_NONE;
         cred_config.Flags = QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
     }
+#endif
 
     status = t->msquic->ConfigurationLoadCredential(t->config_server, &cred_config);
     if (QUIC_FAILED(status)) {
         fprintf(stderr, "[magnetk] Server ConfigurationLoadCredential failed: 0x%x\n", status);
         t->msquic->ConfigurationClose(t->config_server);
         t->msquic->RegistrationClose(t->registration);
+#ifdef _WIN32
+        if (t->cert_context) CertFreeCertificateContext((PCCERT_CONTEXT)t->cert_context);
+#endif
         MsQuicClose(t->msquic);
         free(t);
         return MAGNETK_ERR_TLS;
@@ -272,6 +365,11 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
 
 MAGNETK_API void magnetk_transport_shutdown(magnetk_transport_t* transport) {
     if (!transport) return;
+#ifdef _WIN32
+    if (transport->cert_context) {
+        CertFreeCertificateContext((PCCERT_CONTEXT)transport->cert_context);
+    }
+#endif
     if (transport->config_client) transport->msquic->ConfigurationClose(transport->config_client);
     if (transport->config_server) transport->msquic->ConfigurationClose(transport->config_server);
     if (transport->registration) transport->msquic->RegistrationClose(transport->registration);

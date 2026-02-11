@@ -39,7 +39,7 @@ target_link_libraries(magnetk_transport PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(magnetk_transport PUBLIC ws2_32)
+    target_link_libraries(magnetk_transport PRIVATE ws2_32 crypt32 ncrypt)
     target_compile_definitions(magnetk_transport PRIVATE MAGNETK_TRANSPORT_EXPORTS)
 else()
     target_link_libraries(magnetk_transport PRIVATE pthread)
@@ -60,7 +60,7 @@ target_link_libraries(magnetk_transport_shared PUBLIC
 )
 
 if(WIN32)
-    target_link_libraries(magnetk_transport_shared PUBLIC ws2_32)
+    target_link_libraries(magnetk_transport_shared PUBLIC ws2_32 crypt32 ncrypt)
     target_compile_definitions(magnetk_transport_shared PRIVATE MAGNETK_TRANSPORT_EXPORTS)
 else()
     target_link_libraries(magnetk_transport_shared PUBLIC pthread)

@@ -1,0 +1,3 @@
+$env:Path = "C:\msys64\mingw64\bin;" + $env:Path; cd go; go build -o ../bin/relay.exe ./cmd/relay; go build -o ../bin/peer.exe ./cmd/peer; go build -o ../bin/seed.exe ./cmd/seed; cd ..; ls bin/relay.exe
+
+$env:Path = "D:\More_Projects\Projects\Magnetk\msquic\artifacts\bin\windows\x64_Debug_schannel;" + $env:Path; bin\relay.exe -discovery-port 4001 -port 4002
