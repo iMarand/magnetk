@@ -54,7 +54,8 @@ func main() {
 	}
 
 	// Ensure certificates exist in development mode
-	if cfg.Env == "development" && !cfg.NoCertValidation && (cfg.TLSCertFile == "" || cfg.TLSKeyFile == "") {
+	// Always ensure certificates exist (Linux MsQuic requires them)
+	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 		log.Println("[relay] TLS certificates not specified, generating dev certificates...")
 		cert, key, err := config.EnsureDevCertificates(cfg.TLSCertFile, cfg.TLSKeyFile)
 		if err != nil {

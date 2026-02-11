@@ -297,31 +297,35 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
 
     cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_CONTEXT;
     cred_config.CertificateContext = (QUIC_CERTIFICATE*)t->cert_context;
+    
 #else
     QUIC_CERTIFICATE_FILE cert_file = {0};
     
     /* DEBUG: Print what we received */
     fprintf(stderr, "[magnetk] DEBUG: cert_file=%p, key_file=%p, no_cert_validation=%d\n",
             (void*)config->cert_file, (void*)config->key_file, config->no_cert_validation);
-    if (config->cert_file) fprintf(stderr, "[magnetk] DEBUG: cert_file='%s'\n", config->cert_file);
-    if (config->key_file) fprintf(stderr, "[magnetk] DEBUG: key_file='%s'\n", config->key_file);
     
-    /* For self-signed certs in dev mode, use NONE type to bypass validation */
-    if (config->cert_file && config->key_file && 
-        strlen(config->cert_file) > 0 && strlen(config->key_file) > 0 &&
-        !config->no_cert_validation) {
-        fprintf(stderr, "[magnetk] DEBUG: Using CERTIFICATE_FILE mode\n");
-        /* Production mode with real certs */
-        cert_file.CertificateFile = config->cert_file;
-        cert_file.PrivateKeyFile = config->key_file;
-        cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
-        cred_config.CertificateFile = &cert_file;
-        cred_config.Flags = QUIC_CREDENTIAL_FLAG_NONE;
-    } else {
-        fprintf(stderr, "[magnetk] DEBUG: Using CREDENTIAL_TYPE_NONE mode\n");
-        /* Development mode - use NONE to allow self-signed */
-        cred_config.Type = QUIC_CREDENTIAL_TYPE_NONE;
-        cred_config.Flags = QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
+    /* For self-signed certs in dev mode, generate them if needed */
+    if (!config->cert_file || !config->key_file || 
+        strlen(config->cert_file) == 0 || strlen(config->key_file) == 0) {
+        /* No certs provided - this won't work on Linux, need to generate them in Go */
+        fprintf(stderr, "[magnetk] ERROR: Linux requires certificate files. Set TLS_CERT_FILE and TLS_KEY_FILE in config.\n");
+        fprintf(stderr, "[magnetk] Hint: Run 'openssl req -x509 -newkey rsa:2048 -nodes -keyout config/dev_key.pem -out config/dev_cert.pem -days 365 -subj \"/CN=localhost\"'\n");
+        return MAGNETK_ERR_TLS;
+    }
+    
+    fprintf(stderr, "[magnetk] DEBUG: cert_file='%s', key_file='%s'\n", config->cert_file, config->key_file);
+    
+    /* Use the provided certificate files */
+    cert_file.CertificateFile = config->cert_file;
+    cert_file.PrivateKeyFile = config->key_file;
+    cred_config.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
+    cred_config.CertificateFile = &cert_file;
+    cred_config.Flags = QUIC_CREDENTIAL_FLAG_NONE;
+    
+    /* In dev mode, also skip validation */
+    if (config->no_cert_validation) {
+        cred_config.Flags |= QUIC_CREDENTIAL_FLAG_NO_CERTIFICATE_VALIDATION;
     }
 #endif
 
