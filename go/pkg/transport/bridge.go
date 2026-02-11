@@ -126,12 +126,11 @@ func NewTransport(cfg Config) (*Transport, error) {
 	cConfig.bind_address = cBind
 	cConfig.port = C.uint16_t(cfg.Port)
 
-	if cfg.CertFile != "" {
+	if cfg.CertFile != "" && cfg.KeyFile != "" {
 		cCert := C.CString(cfg.CertFile)
 		defer C.free(unsafe.Pointer(cCert))
 		cConfig.cert_file = cCert
-	}
-	if cfg.KeyFile != "" {
+		
 		cKey := C.CString(cfg.KeyFile)
 		defer C.free(unsafe.Pointer(cKey))
 		cConfig.key_file = cKey
