@@ -301,7 +301,9 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
     QUIC_CERTIFICATE_FILE cert_file = {0};
     
     /* For self-signed certs in dev mode, use NONE type to bypass validation */
-    if (config->cert_file && config->key_file && !config->no_cert_validation) {
+    if (config->cert_file && config->key_file && 
+        strlen(config->cert_file) > 0 && strlen(config->key_file) > 0 &&
+        !config->no_cert_validation) {
         /* Production mode with real certs */
         cert_file.CertificateFile = config->cert_file;
         cert_file.PrivateKeyFile = config->key_file;
