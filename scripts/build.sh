@@ -17,6 +17,9 @@ echo "Go version:"
 go version
 echo
 
+# Navigate to project root (one level up from scripts)
+cd "$(dirname "$0")/.."
+
 # Create output directory
 mkdir -p bin
 
@@ -45,17 +48,21 @@ if ! go build -o ../bin/peer ./cmd/peer; then
     exit 1
 fi
 
-cd ..
+# Copy shared libraries to bin
+echo "Copying dependencies..."
+cp ../c/build/*.so ../bin/ 2>/dev/null
+cp ../c/build/*.dylib ../bin/ 2>/dev/null
 
 echo
 echo "========================================"
 echo " Build Complete!"
 echo "========================================"
 echo
-echo "Binaries are in the 'bin' directory:"
+echo "Binaries and libraries are in the 'bin' directory:"
 echo "  - bin/relay  (Relay Node)"
 echo "  - bin/seed   (Seed Node)"
 echo "  - bin/peer   (Peer Client)"
+echo "  - bin/*.so   (Shared Libraries)"
 echo
 echo "Usage:"
 echo "  1. Start relay:  ./bin/relay --port 4001"
