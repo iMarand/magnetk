@@ -41,6 +41,10 @@ const (
 	MsgHeartbeat    uint8 = 0x30
 	MsgHeartbeatAck uint8 = 0x31
 
+	// Identity
+	MsgGetIdentity uint8 = 0x32
+	MsgIdentityRes uint8 = 0x33
+
 	// Error
 	MsgError uint8 = 0xFF
 )
@@ -254,4 +258,10 @@ type ErrorPayload struct {
 type HeartbeatPayload struct {
 	PeerID    string `json:"peer_id"`
 	Timestamp int64  `json:"timestamp"`
+}
+
+// IdentityResponsePayload contains the relay's identity.
+type IdentityResponsePayload struct {
+	PeerID     string   `json:"peer_id"`
+	Multiaddrs []string `json:"multiaddrs"`
 }

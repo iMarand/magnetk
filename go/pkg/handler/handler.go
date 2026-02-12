@@ -128,6 +128,18 @@ func (rh *RelayHandler) HandleTCPDiscovery(conn net.Conn) {
 			// Heartbeat for TCP clients
 			writer.WriteJSON(protocol.MsgHeartbeatAck, protocol.HeartbeatPayload{Timestamp: time.Now().Unix()})
 
+		case protocol.MsgGetIdentity:
+			// Get relay identity (PeerID + Multiaddrs)
+			addrs := rh.host.Addrs()
+			addrStrings := make([]string, len(addrs))
+			for i, addr := range addrs {
+				addrStrings[i] = fmt.Sprintf("%s/p2p/%s", addr.String(), rh.host.ID().String())
+			}
+			writer.WriteJSON(protocol.MsgIdentityRes, protocol.IdentityResponsePayload{
+				PeerID:     rh.host.ID().String(),
+				Multiaddrs: addrStrings,
+			})
+
 		default:
 			writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
 				Code:    protocol.ErrCodeInvalidRequest,

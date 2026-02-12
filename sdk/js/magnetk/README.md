@@ -7,67 +7,63 @@ The professional JavaScript SDK for interacting with the Magnetk P2P network. Th
 If using as a standalone folder, simply place the `magnetk` folder into your `node_modules` or clone it into your project.
 
 ```bash
-npm install magnetk-sdk-js
+npm install magnetk
 ```
 
 ## Usage
 
-### Parsing a Magnetk Link
+### One-Line Seeding (Zero Config)
+The SDK automatically hashes your file, discovers the relay, and spawns the high-performance Go seeder in the background.
 
 ```javascript
-import { MagnetkLink } from 'magnetk';
+import { MagnetkClient } from 'magnetk';
 
-const uri = 'magnetk:?xt=urn:sha256:abc123...&dn=myfile.zip&xl=1048576&relay=1.2.3.4';
-const link = MagnetkLink.parse(uri);
+const client = new MagnetkClient({
+    relayUrl: '69.169.109.243', // Optional: defaults to public relay
+    relayPort: 4003
+});
 
-console.log(link.fileName); // myfile.zip
-console.log(link.fileHash); // abc123...
+// Seed a file and get a shareable link
+const link = await client.seed('./my-app.zip');
+console.log(`Share this link: ${link}`);
+
+// Keep the process alive to serve peers (Ctrl+C to stop)
+await client.keepSeeding();
 ```
 
-### Generating a Magnetk Link
+### One-Line Downloading
+Download files with automatic connection optimization (Direct > Local > Relay).
 
 ```javascript
-import { MagnetkLink } from 'magnetk';
+const magnetURI = 'magnetk:?xt=urn:sha256:abc...&relay=...';
 
-const link = new MagnetkLink(
-    '98df9a59...',           // File Hash
-    'app.txt',              // File Name
-    4,                      // File Size (bytes)
-    '12D3KooWDmX2...',      // Seed Peer ID
-    '/ip4/1.2.3.4/tcp/4001' // Relay Multiaddr
-);
-
-console.log(link.toString());
-// Output: magnetk:?dn=app.txt&relay=%2Fip4%2F1.2.3.4...
+console.log('Downloading...');
+await client.download(magnetURI, './my-app-downloaded.zip');
+console.log('Done!');
 ```
 
-### Downloading a File
+### Event-Driven Progress tracking
+Track every stage of the transfer with the new Event API.
 
 ```javascript
-import { MagnetkClient, CONNECTION_TYPE } from 'magnetk';
-
 const client = new MagnetkClient();
-const uri = 'magnetk:?xt=urn:sha256:98df9a...&dn=app.txt&relay=/ip4/1.2.3.4/tcp/4001';
 
-try {
-    console.log('Starting P2P download...');
-    await client.download(uri, './downloads/app.txt');
+// Seeding Events
+client.on('hashing', (p) => console.log(`Hashing file: ${p.percent}%`));
+client.on('seeding', (info) => console.log(`Seeding ${info.fileName} (${info.fileSize} bytes)`));
+client.on('relay-connected', (r) => console.log(`Live on Relay: ${r.host}`));
 
-    // Access connection diagnostics
-    const stats = client.lastDownloadStats;
-    console.log(`Success! Connection Type: ${stats.connectionType}`);
-    console.log(`Remote Address: ${stats.remoteAddr}`);
-} catch (err) {
-    console.error('Download failed:', err.message);
-}
+// Download Events
+client.on('download-start', (info) => console.log(`Starting: ${info.fileName}`));
+client.on('progress', (p) => {
+    process.stdout.write(`\rDownload: ${p.percent.toFixed(1)}% | Speed: ${p.speed} KB/s`);
+});
+client.on('connection-type', (c) => console.log(`\nConnection Mode: ${c.type}`)); // DIRECT, RELAYED, LOCAL
+client.on('complete', (info) => console.log(`\nSaved to: ${info.filePath}`));
+
+// Error Handling
+client.on('error', (err) => console.error(`Error (${err.code}): ${err.message}`));
 ```
-
-### Checking Connection Types
-
-The SDK automatically tracks the quality of your P2P connection:
-- `CONNECTION_TYPE.DIRECT`: High-speed P2P (via STUN discovered public IP).
-- `CONNECTION_TYPE.LOCAL`: Super-fast local transfer (same machine/LAN).
-- `CONNECTION_TYPE.RELAYED`: Connection bridged via relay (fallback).
 
 ## Advanced Features
 
@@ -79,37 +75,30 @@ const identity = await client.getPublicIdentity();
 console.log(`Public Identity: ${identity.ip}:${identity.port}`);
 ```
 
-### Seeding (Distributing Files)
-To share a file on the Magnetk network, use the high-performance **Go Seeder** included in the toolkit:
-
-```bash
-# Seed a file via the relay
-./bin/seed.exe -relay "/ip4/relay-ip/tcp/4001" -file "path/to/file.zip"
-```
-
-## CLI Interface
-
+### Manual CLI
 For quick operations, use the global `magnetk` command:
 
 ```bash
-# Lookup seeds for a hash
-magnetk lookup 98df9a59... --relay 1.2.3.4
-
 # Download a file
 magnetk download "magnetk:?..." --output ./file.zip
 ```
 
 ## API Reference
 
-### `MagnetkLink`
-- `static parse(uri)`: Create a link object from string.
-- `toString()`: Serialize back to string.
-
 ### `MagnetkClient`
-- `download(uri, outputPath)`: High-level P2P download.
-- `getPublicIdentity()`: Resolve public IP via STUN.
-- `lastDownloadStats`: Metadata from the previous download.
-- `lookupPeer(relayHost, relayPort, fileHash)`: Query relay for seeds.
+- `constructor(config)`: `{ relayUrl, relayPort, seedPort, enableSTUN }`
+- `seed(filePath)`: Returns `Promise<magnetLink>`. Spawns background seeder.
+- `download(uri, outputPath)`: Downloads file. Emits progress events.
+- `stop()`: Kills all background seeder processes.
+- `getRelayIdentity()`: Fetches Relay Peer ID and Multiaddrs.
+
+### Events
+- `hashing`: `{ percent }`
+- `seeding`: `{ fileName, fileSize, hash }`
+- `progress`: `{ percent, bytesDownloaded, totalBytes, speed }`
+- `connection-type`: `{ type }` (DIRECT, RELAYED, LOCAL)
+- `error`: `{ code, message }`
 
 ## License
 MIT
+

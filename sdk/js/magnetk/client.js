@@ -8,6 +8,10 @@
 import net from 'net';
 import fs from 'fs';
 import dgram from 'dgram';
+import crypto from 'crypto';
+import path from 'path';
+import { spawn } from 'child_process';
+import { EventEmitter } from 'events';
 import { MagnetkLink } from './magnetk.js';
 
 const MSG_TYPE = {
@@ -17,6 +21,8 @@ const MSG_TYPE = {
     MSG_MANIFEST_RES: 0x11,
     MSG_CHUNK_REQ: 0x20,
     MSG_CHUNK_RES: 0x21,
+    MSG_GET_IDENTITY: 0x32,
+    MSG_IDENTITY_RES: 0x33,
     MSG_ERROR: 0xFF
 };
 
@@ -27,10 +33,17 @@ export const CONNECTION_TYPE = {
     UNKNOWN: 'UNKNOWN'
 };
 
-export class MagnetkClient {
+export class MagnetkClient extends EventEmitter {
     constructor(config = {}) {
-        this.config = config;
-        this.connections = new Map();
+        super();
+        this.config = {
+            relayUrl: '69.169.109.243',
+            relayPort: 4003,
+            seedPort: 4002,
+            enableSTUN: true,
+            ...config
+        };
+        this.processes = [];
         this.lastDownloadStats = {
             connectionType: CONNECTION_TYPE.UNKNOWN,
             remoteAddr: null,
@@ -105,6 +118,33 @@ export class MagnetkClient {
     }
 
     /**
+     * Retrieves the relay's Peer ID and multiaddrs via TCP.
+     */
+    async getRelayIdentity() {
+        console.log(`[Magnetk-JS] Fetching relay identity from ${this.config.relayUrl}:${this.config.relayPort}...`);
+        const socket = await this.connect(this.config.relayUrl, this.config.relayPort);
+        const writer = new FrameWriter(socket);
+        const reader = new FrameReader(socket);
+
+        try {
+            await writer.writeFrame(MSG_TYPE.MSG_GET_IDENTITY, Buffer.alloc(0)); // Empty payload
+            const frame = await reader.readFrame();
+
+            if (frame.type === MSG_TYPE.MSG_IDENTITY_RES) {
+                const result = JSON.parse(frame.payload.toString());
+                return result;
+            } else if (frame.type === MSG_TYPE.MSG_ERROR) {
+                const err = JSON.parse(frame.payload.toString());
+                throw new Error(`Relay error: ${err.message}`);
+            } else {
+                throw new Error(`Unexpected response type: 0x${frame.type.toString(16)}`);
+            }
+        } finally {
+            socket.end();
+        }
+    }
+
+    /**
      * Look up seeds for a file hash from the relay.
      * @param {string} relayHost 
      * @param {number} relayPort 
@@ -136,38 +176,136 @@ export class MagnetkClient {
     }
 
     /**
+     * Seeds a file and returns a Magnetk link.
+     * @param {string} filePath 
+     * @returns {Promise<string>}
+     */
+    async seed(filePath) {
+        const absolutePath = path.resolve(filePath);
+        if (!fs.existsSync(absolutePath)) {
+            throw new Error(`File not found: ${absolutePath}`);
+        }
+
+        this.emit('validating-relay');
+        // Simple reachability check (optional but good for UX)
+
+        const fileStats = fs.statSync(absolutePath);
+        this.emit('hashing', { percent: 0 });
+
+        // Calculate hash
+        const hash = await this._calculateHash(absolutePath);
+        this.emit('hashing', { percent: 100 });
+
+        // Fetch Relay Identity to get Peer ID
+        let relayPeerId;
+        try {
+            const identity = await this.getRelayIdentity();
+            relayPeerId = identity.peer_id;
+            console.log(`[Magnetk-JS] Relay Peer ID: ${relayPeerId}`);
+        } catch (e) {
+            console.warn(`[Magnetk-JS] Failed to fetch relay identity: ${e.message}. Using default/configured address might fail if Peer ID is missing.`);
+        }
+
+        const binPath = this._resolveBinPath('seed.exe');
+        const configPath = this._resolveConfigPath();
+
+        // Construct full multiaddr if we have the Peer ID
+        let relayMultiaddr = `/ip4/${this.config.relayUrl}/tcp/4001`;
+        if (relayPeerId) {
+            relayMultiaddr += `/p2p/${relayPeerId}`;
+        }
+
+        const args = [
+            '-relay', relayMultiaddr,
+            '-file', absolutePath,
+            '-port', this.config.seedPort.toString(),
+            '-config', configPath
+        ];
+
+        console.log(`[Magnetk-JS] Spawning seeder: ${binPath} ${args.join(' ')}`);
+
+        return new Promise((resolve, reject) => {
+            const seeder = spawn(binPath, args);
+            this.processes.push(seeder);
+
+            let linkFound = false;
+
+            seeder.stdout.on('data', (data) => {
+                const output = data.toString();
+                if (output.includes('Magnetk Link:')) {
+                    const link = output.split('Magnetk Link:')[1].trim().split('\n')[0].trim();
+                    linkFound = true;
+                    this.emit('seeding', {
+                        fileName: path.basename(absolutePath),
+                        fileSize: fileStats.size,
+                        hash: hash
+                    });
+                    resolve(link);
+                }
+            });
+
+            seeder.stderr.on('data', (data) => {
+                const msg = data.toString();
+                console.log(`[Seeder Stderr] ${msg}`); // Uncommented for debug
+                if (msg.includes('Connected to relay')) {
+                    this.emit('relay-connected', { host: this.config.relayUrl, port: 4001 });
+                }
+            });
+
+            seeder.on('error', (err) => {
+                if (!linkFound) reject(err);
+                this.emit('error', { code: 'SEEDER_ERROR', message: err.message });
+            });
+
+            seeder.on('close', (code) => {
+                if (!linkFound && code !== 0) {
+                    reject(new Error(`Seeder exited with code ${code}`));
+                }
+            });
+        });
+    }
+
+    /**
+     * Keeps seeding active processes.
+     */
+    async keepSeeding() {
+        console.log('Press Ctrl+C to stop seeding');
+        return new Promise(() => { }); // Wait forever
+    }
+
+    /**
+     * Stops all active seeding processes.
+     */
+    stop() {
+        this.processes.forEach(p => p.kill());
+        this.processes = [];
+    }
+
+    /**
      * Downloads a file from a magnetk link.
      * @param {string} magnetURI 
      * @param {string} outputPath 
      */
     async download(magnetURI, outputPath) {
-        const ml = MagnetkLink.parse(magnetURI);
-        console.log(`[Magnetk-JS] Starting download for: ${ml.fileName}`);
+        const ml = typeof magnetURI === 'string' ? MagnetkLink.parse(magnetURI) : magnetURI;
+        this.emit('download-start', { fileName: ml.fileName });
 
-        // 1. Resolve seed address from the Relay
-        // We extract the relay host from the Magnetk Link
-        const relayHost = ml.relayAddr.split('/')[2];
-        const discoveryPort = 4003;
+        // Resolve relay info from link or config
+        const relayHost = ml.relayAddr ? ml.relayAddr.split('/')[2] : this.config.relayUrl;
+        const discoveryPort = this.config.relayPort;
 
-        console.log(`[Magnetk-JS] Querying relay ${relayHost}:${discoveryPort} for seeds...`);
         let lookupResult;
         try {
             lookupResult = await this.lookupPeer(relayHost, discoveryPort, ml.fileHash);
         } catch (e) {
-            console.error(`[Magnetk-JS] Initial lookup failed: ${e.message}`);
+            this.emit('error', { code: 'LOOKUP_FAILED', message: e.message });
+            throw e;
         }
 
         const addressesToTry = [];
         if (lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
             const seed = lookupResult.seeds[0];
-            console.log(`[Magnetk-JS] Found seed: ${seed.peer_id}`);
-
-            // 1. Add transport_addr if present
-            if (seed.transport_addr) {
-                addressesToTry.push(seed.transport_addr);
-            }
-
-            // 2. Add from multiaddrs (look for /ip4/x.x.x.x/tcp/yyyy)
+            if (seed.transport_addr) addressesToTry.push(seed.transport_addr);
             if (seed.addresses) {
                 seed.addresses.forEach(addr => {
                     const parts = addr.split('/');
@@ -177,14 +315,9 @@ export class MagnetkClient {
                 });
             }
         }
-
-        // Add localhost fallback as last resort for dev
         addressesToTry.push('127.0.0.1:4002');
 
-        // Unique addresses only
         const uniqueAddrs = [...new Set(addressesToTry)];
-        console.log(`[Magnetk-JS] Candidate seeds: [${uniqueAddrs.join(', ')}]`);
-
         let socket;
         let connectionType = CONNECTION_TYPE.UNKNOWN;
         let finalAddr = null;
@@ -196,80 +329,105 @@ export class MagnetkClient {
             try {
                 socket = await this.connect(host, port);
                 finalAddr = addr;
+                if (host === '127.0.0.1' || host === 'localhost') connectionType = CONNECTION_TYPE.LOCAL;
+                else if (host === relayHost) connectionType = CONNECTION_TYPE.RELAYED;
+                else connectionType = CONNECTION_TYPE.DIRECT;
 
-                // Determine connection type
-                if (host === '127.0.0.1' || host === 'localhost') {
-                    connectionType = CONNECTION_TYPE.LOCAL;
-                } else if (host === relayHost) {
-                    connectionType = CONNECTION_TYPE.RELAYED;
-                } else {
-                    connectionType = CONNECTION_TYPE.DIRECT;
-                }
+                this.emit('connection-type', { type: connectionType });
                 break;
-            } catch (e) {
-                console.log(`[Magnetk-JS] Failed to connect to ${addr}.`);
-            }
+            } catch (e) { }
         }
 
-        if (!socket) {
-            throw new Error('All seed connection attempts failed. Possible NAT blocking.');
-        }
+        if (!socket) throw new Error('All seed connection attempts failed.');
 
         this.lastDownloadStats.connectionType = connectionType;
         this.lastDownloadStats.remoteAddr = finalAddr;
-        console.log(`[Magnetk-JS] » Final Connection: ${finalAddr} (${connectionType})`);
 
         const writer = new FrameWriter(socket);
         const reader = new FrameReader(socket);
 
         try {
-            // STEP 1: Request manifest
-            console.log(`[Magnetk-JS] Requesting manifest for ${ml.fileHash.substring(0, 10)}...`);
             await writer.writeJSON(MSG_TYPE.MSG_MANIFEST_REQ, { file_hash: ml.fileHash });
-
             const manifestFrame = await reader.readFrame();
-            if (manifestFrame.type !== MSG_TYPE.MSG_MANIFEST_RES) {
-                throw new Error(`Unexpected manifest response type: 0x${manifestFrame.type.toString(16)}`);
-            }
-
             const manifest = JSON.parse(manifestFrame.payload.toString());
-            console.log(`[Magnetk-JS] Manifest received: ${manifest.file_name}, ${manifest.total_chunks} chunks, total size: ${manifest.file_size} bytes`);
 
-            // STEP 2: Prepare output file
             const fd = fs.openSync(outputPath, 'w');
+            let bytesDownloaded = 0;
+            const startTime = Date.now();
 
-            // STEP 3: Request and write chunks
             for (let i = 0; i < manifest.total_chunks; i++) {
-                process.stdout.write(`\r[Magnetk-JS] Downloading chunk ${i + 1}/${manifest.total_chunks}...`);
-
                 await writer.writeJSON(MSG_TYPE.MSG_CHUNK_REQ, {
                     file_hash: ml.fileHash,
                     chunk_indices: [i]
                 });
 
                 const chunkFrame = await reader.readFrame();
-                if (chunkFrame.type !== MSG_TYPE.MSG_CHUNK_RES) {
-                    throw new Error(`Unexpected chunk response type: 0x${chunkFrame.type.toString(16)}`);
-                }
-
-                // Chunk payload format: [4 bytes: index][raw data]
-                const index = chunkFrame.payload.readUInt32BE(0);
                 const data = chunkFrame.payload.slice(4);
 
-                // Write to file at correct offset
-                const offset = i * manifest.chunk_size;
-                fs.writeSync(fd, data, 0, data.length, offset);
+                fs.writeSync(fd, data, 0, data.length, i * manifest.chunk_size);
+
+                bytesDownloaded += data.length;
+                const percent = (bytesDownloaded / manifest.file_size) * 100;
+                const elapsedS = (Date.now() - startTime) / 1000;
+                const speed = elapsedS > 0 ? (bytesDownloaded / 1024 / elapsedS).toFixed(1) : 0;
+
+                this.emit('progress', {
+                    percent,
+                    bytesDownloaded,
+                    totalBytes: manifest.file_size,
+                    speed
+                });
             }
 
             fs.closeSync(fd);
-            console.log(`\n[Magnetk-JS] ✓ Download complete: ${outputPath}`);
-
-        } catch (err) {
-            console.error(`[Magnetk-JS] Download failed: ${err.message}`);
-            throw err;
+            this.emit('complete', { filePath: outputPath });
         } finally {
             socket.end();
         }
+    }
+
+    /**
+     * Finds available seeders for a hash.
+     */
+    async lookupSeeds(fileHash) {
+        const result = await this.lookupPeer(this.config.relayUrl, this.config.relayPort, fileHash);
+        return result.found ? result.seeds : [];
+    }
+
+    _calculateHash(filePath) {
+        return new Promise((resolve, reject) => {
+            const hash = crypto.createHash('sha256');
+            const stream = fs.createReadStream(filePath);
+            stream.on('data', data => hash.update(data));
+            stream.on('end', () => resolve(hash.digest('hex')));
+            stream.on('error', reject);
+        });
+    }
+
+    _resolveBinPath(binName) {
+        // Try to find bin in likely locations
+        const paths = [
+            path.join(process.cwd(), 'bin', binName),
+            path.join(process.cwd(), '..', '..', '..', 'bin', binName),
+            path.join(process.cwd(), '..', '..', 'bin', binName),
+            path.join(process.cwd(), '..', 'bin', binName)
+        ];
+        for (const p of paths) {
+            if (fs.existsSync(p)) return p;
+        }
+        return binName; // Fallback to PATH
+    }
+
+    _resolveConfigPath() {
+        const paths = [
+            path.join(process.cwd(), 'config', 'settings.conf'),
+            path.join(process.cwd(), '..', '..', '..', 'config', 'settings.conf'),
+            path.join(process.cwd(), '..', '..', 'config', 'settings.conf')
+        ];
+        for (const p of paths) {
+            if (fs.existsSync(p)) return p;
+        }
+        return ''; // Let seeder use default
     }
 }
 
