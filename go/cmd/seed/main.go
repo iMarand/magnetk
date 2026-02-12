@@ -346,22 +346,32 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	}
 	defer s.Close()
 
-	// Try to get public identity via STUN
-	publicIP, publicPort, err := getPublicIdentity("stun.l.google.com:19302")
+	// Determine advertised address
 	addresses := []string{}
-	if err == nil {
-		log.Printf("[seed] Discovered public identity: %s:%d", publicIP, publicPort)
-		// Add public addresses first to prioritize them
-		addresses = append(addresses,
-			fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", publicIP, publicPort),
-			fmt.Sprintf("/ip4/%s/tcp/%d", publicIP, publicPort),
-		)
+	advertisedAddr := cfg.BindAddress
+	
+	if cfg.AdvertisedAddress != "" {
+		// Use configured advertised address (e.g., VPS public IP)
+		advertisedAddr = cfg.AdvertisedAddress
+		log.Printf("[seed] Using configured advertised address: %s", advertisedAddr)
 	} else {
-		log.Printf("[seed] Warning: STUN discovery failed: %v", err)
+		// Fallback to STUN discovery
+		publicIP, publicPort, err := getPublicIdentity("stun.l.google.com:19302")
+		if err == nil {
+			advertisedAddr = publicIP
+			log.Printf("[seed] Discovered public identity via STUN: %s:%d", publicIP, publicPort)
+		} else {
+			log.Printf("[seed] Warning: No advertised address configured and STUN failed, using bind address")
+		}
 	}
-
-	// Add local address
-	addresses = append(addresses, fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.TransportPort))
+	
+	// Add advertised addresses
+	addresses = append(addresses,
+		fmt.Sprintf("/ip4/%s/tcp/%d", advertisedAddr, cfg.TransportPort),
+		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", advertisedAddr, cfg.TransportPort),
+	)
+	
+	log.Printf("[seed] Publishing addresses: %v", addresses)
 
 	payload := protocol.LegacyPublishFilePayload{
 		PeerID:     h.ID().String(),

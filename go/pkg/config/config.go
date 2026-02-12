@@ -10,6 +10,7 @@ import (
 )
 
 // Config holds all configuration values
+// Config holds all configuration values
 type Config struct {
 	// Chunking settings
 	ChunkSizeMB       int
@@ -22,13 +23,14 @@ type Config struct {
 	DiskBackedBuffer bool
 
 	// Network settings
-	BindAddress     string // Listen on this address (0.0.0.0 or 127.0.0.1)
-	DiscoveryPort   int    // libp2p discovery port
-	TransportPort   int    // MsQuic data transfer port
-	QUICPort        int    // Kept for backward compat, maps to TransportPort
-	PingIntervalSec int
-	RetryBackoffSec int
-	LocalhostMode   bool // Bind to 127.0.0.1 only
+	BindAddress       string // Listen on this address (0.0.0.0 or 127.0.0.1)
+	AdvertisedAddress string // Public IP to advertise to peers (e.g., VPS public IP)
+	DiscoveryPort     int    // libp2p discovery port
+	TransportPort     int    // MsQuic data transfer port
+	QUICPort          int    // Kept for backward compat, maps to TransportPort
+	PingIntervalSec   int
+	RetryBackoffSec   int
+	LocalhostMode     bool   // Bind to 127.0.0.1 only
 
 	// TLS / Security
 	TLSCertFile      string // Path to TLS cert (empty = self-signed)
@@ -164,6 +166,8 @@ func (c *Config) set(key, value string) error {
 		c.DiskBackedBuffer = strings.ToLower(value) == "true"
 	case "BIND_ADDRESS":
 		c.BindAddress = value
+	case "ADVERTISED_ADDRESS":
+		c.AdvertisedAddress = value
 	case "DISCOVERY_PORT":
 		v, err := strconv.Atoi(value)
 		if err != nil {
