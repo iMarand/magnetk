@@ -61,6 +61,17 @@ func main() {
 		cfg.TransportPort = *portStr
 	}
 
+	// Always ensure certificates exist (Linux MsQuic requires them)
+	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+		log.Println("[seed] TLS certificates not specified, generating dev certificates...")
+		cert, key, err := config.EnsureDevCertificates(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			log.Fatalf("[seed] Failed to ensure dev certificates: %v", err)
+		}
+		cfg.TLSCertFile = cert
+		cfg.TLSKeyFile = key
+	}
+
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║         MAGNETK P2P SEED NODE                 ║")
 	fmt.Println("║         Hybrid MsQuic + libp2p              ║")
@@ -101,6 +112,8 @@ func main() {
 	transportCfg := transport.Config{
 		BindAddress:       cfg.EffectiveBindAddress(),
 		Port:              uint16(cfg.TransportPort),
+		CertFile:          cfg.TLSCertFile,
+		KeyFile:           cfg.TLSKeyFile,
 		NoCertValidation:  cfg.NoCertValidation,
 		ALPN:              "magnetk",
 		MaxConnections:    uint32(cfg.MaxConnections),
