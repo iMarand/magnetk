@@ -16,3 +16,6 @@ go build -o ../bin/relay ./cmd/relay
 cd ~/Desktop/Magnetk/magnetk
 export LD_LIBRARY_PATH=$PWD/bin:$LD_LIBRARY_PATH
 ./bin/relay
+
+
+.\bin\seed.exe -relay /ip4/127.0.0.1/tcp/4001/p2p/12D3KooWMnxXT7QDbhKwenaGKKdwZL4xWJTtVmJMTGD94PFePiRH -file .\TEST\app.txt -port 4002

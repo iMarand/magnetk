@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 
-const RELAY_ADDR = "/ip4/69.169.109.243/tcp/4001/p2p/12D3KooWJFPHu2bZzg7VRyYs9T2xoKkduqWUwYG2Quv5qHem66MW";
+const RELAY_ADDR = "/ip4/69.169.109.243/tcp/4001/p2p/12D3KooWEKJUufshuxgT39pGaXw5Pk1PrBUotVgWqjbc8pZEPcY6";
 const PROJECT_ROOT = path.join(process.cwd(), '..');
 const SEEDER_PATH = path.join(PROJECT_ROOT, 'bin', 'seed.exe');
 

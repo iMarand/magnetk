@@ -188,6 +188,7 @@ type LookupPeerPayload struct {
 
 // LookupResultPayload returns matching seeds.
 type LookupResultPayload struct {
+	Found bool       `json:"found"`
 	Seeds []SeedInfo `json:"seeds"`
 }
 

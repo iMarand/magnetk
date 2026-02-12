@@ -1,7 +1,7 @@
 import { MagnetkClient } from './client.js';
 import { MagnetkLink } from './magnetk.js';
 
-const VPS_IP = '69.169.109.243';
+const VPS_IP = '127.0.0.1';
 const RELAY_PORT = 4003;
 
 async function runLookup() {

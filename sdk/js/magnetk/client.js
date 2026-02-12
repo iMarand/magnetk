@@ -7,6 +7,7 @@
 
 import net from 'net';
 import fs from 'fs';
+import dgram from 'dgram';
 import { MagnetkLink } from './magnetk.js';
 
 const MSG_TYPE = {
@@ -19,10 +20,69 @@ const MSG_TYPE = {
     MSG_ERROR: 0xFF
 };
 
+export const CONNECTION_TYPE = {
+    DIRECT: 'DIRECT',
+    RELAYED: 'RELAYED',
+    LOCAL: 'LOCAL',
+    UNKNOWN: 'UNKNOWN'
+};
+
 export class MagnetkClient {
     constructor(config = {}) {
         this.config = config;
         this.connections = new Map();
+        this.lastDownloadStats = {
+            connectionType: CONNECTION_TYPE.UNKNOWN,
+            remoteAddr: null,
+            duration: 0,
+            bytesReceived: 0
+        };
+    }
+
+    /**
+     * Retrieves the public IP and port using STUN.
+     * @returns {Promise<{ip: string, port: number}>}
+     */
+    getPublicIdentity(stunServer = 'stun.l.google.com', stunPort = 19302) {
+        return new Promise((resolve, reject) => {
+            const socket = dgram.createSocket('udp4');
+            const message = Buffer.alloc(20);
+            message.writeUInt16BE(0x0001, 0); // Binding Request
+            message.writeUInt16BE(0x0000, 2); // Length
+            message.writeUInt32BE(0x2112A442, 4); // Magic Cookie
+            for (let i = 8; i < 20; i++) message[i] = Math.floor(Math.random() * 256);
+
+            const timeout = setTimeout(() => {
+                socket.close();
+                reject(new Error('STUN discovery timed out'));
+            }, 5000);
+
+            socket.on('message', (msg) => {
+                let offset = 20;
+                while (offset < msg.length) {
+                    const attrType = msg.readUInt16BE(offset);
+                    const attrLen = msg.readUInt16BE(offset + 2);
+                    if (attrType === 0x0020) { // XOR-MAPPED-ADDRESS
+                        const port = msg.readUInt16BE(offset + 6) ^ 0x2112;
+                        const ip = [];
+                        for (let i = 0; i < 4; i++) ip.push(msg[offset + 8 + i] ^ message[4 + i]);
+                        clearTimeout(timeout);
+                        socket.close();
+                        resolve({ ip: ip.join('.'), port });
+                        return;
+                    }
+                    offset += 4 + attrLen;
+                }
+            });
+
+            socket.on('error', (err) => {
+                clearTimeout(timeout);
+                socket.close();
+                reject(err);
+            });
+
+            socket.send(message, 0, message.length, stunPort, stunServer);
+        });
     }
 
     /**
@@ -87,7 +147,7 @@ export class MagnetkClient {
         // 1. Resolve seed address from the Relay
         // We extract the relay host from the Magnetk Link
         const relayHost = ml.relayAddr.split('/')[2];
-        const discoveryPort = 4003; // New TCP discovery port on relay
+        const discoveryPort = 4003;
 
         console.log(`[Magnetk-JS] Querying relay ${relayHost}:${discoveryPort} for seeds...`);
         let lookupResult;
@@ -95,42 +155,69 @@ export class MagnetkClient {
             lookupResult = await this.lookupPeer(relayHost, discoveryPort, ml.fileHash);
         } catch (e) {
             console.error(`[Magnetk-JS] Initial lookup failed: ${e.message}`);
-            console.log(`[Magnetk-JS] Attempting fallback to direct connection...`);
         }
 
-        let seedHost = relayHost; // Default to relay as fallback (unlikely to work for data)
-        let seedPort = 4002;
-
+        const addressesToTry = [];
         if (lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
             const seed = lookupResult.seeds[0];
             console.log(`[Magnetk-JS] Found seed: ${seed.peer_id}`);
 
+            // 1. Add transport_addr if present
             if (seed.transport_addr) {
-                const parts = seed.transport_addr.split(':');
-                seedHost = parts[0];
-                seedPort = parseInt(parts[1], 10) || 4002;
+                addressesToTry.push(seed.transport_addr);
+            }
+
+            // 2. Add from multiaddrs (look for /ip4/x.x.x.x/tcp/yyyy)
+            if (seed.addresses) {
+                seed.addresses.forEach(addr => {
+                    const parts = addr.split('/');
+                    if (parts.length >= 5 && parts[1] === 'ip4' && parts[3] === 'tcp') {
+                        addressesToTry.push(`${parts[2]}:${parts[4]}`);
+                    }
+                });
             }
         }
 
-        // SPECIAL CASE for local testing:
-        // If the seed host is exactly the same as the relay host, and the connection refused,
-        // it's likely because the seeder is actually LOCAL to the user's PC.
-        // We'll try to connect to localhost if the direct connection fails.
+        // Add localhost fallback as last resort for dev
+        addressesToTry.push('127.0.0.1:4002');
 
-        console.log(`[Magnetk-JS] Connecting to seed at ${seedHost}:${seedPort} (TCP)...`);
+        // Unique addresses only
+        const uniqueAddrs = [...new Set(addressesToTry)];
+        console.log(`[Magnetk-JS] Candidate seeds: [${uniqueAddrs.join(', ')}]`);
 
         let socket;
-        try {
-            socket = await this.connect(seedHost, seedPort);
-        } catch (e) {
-            if (seedHost !== '127.0.0.1' && seedHost !== 'localhost') {
-                console.log(`[Magnetk-JS] Connection to ${seedHost} failed. Trying LOCALHOST fallback for development...`);
-                socket = await this.connect('127.0.0.1', 4002);
-                seedHost = '127.0.0.1';
-            } else {
-                throw e;
+        let connectionType = CONNECTION_TYPE.UNKNOWN;
+        let finalAddr = null;
+
+        for (const addr of uniqueAddrs) {
+            const [host, portStr] = addr.split(':');
+            const port = parseInt(portStr, 10) || 4002;
+
+            try {
+                socket = await this.connect(host, port);
+                finalAddr = addr;
+
+                // Determine connection type
+                if (host === '127.0.0.1' || host === 'localhost') {
+                    connectionType = CONNECTION_TYPE.LOCAL;
+                } else if (host === relayHost) {
+                    connectionType = CONNECTION_TYPE.RELAYED;
+                } else {
+                    connectionType = CONNECTION_TYPE.DIRECT;
+                }
+                break;
+            } catch (e) {
+                console.log(`[Magnetk-JS] Failed to connect to ${addr}.`);
             }
         }
+
+        if (!socket) {
+            throw new Error('All seed connection attempts failed. Possible NAT blocking.');
+        }
+
+        this.lastDownloadStats.connectionType = connectionType;
+        this.lastDownloadStats.remoteAddr = finalAddr;
+        console.log(`[Magnetk-JS] » Final Connection: ${finalAddr} (${connectionType})`);
 
         const writer = new FrameWriter(socket);
         const reader = new FrameReader(socket);

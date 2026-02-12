@@ -1,0 +1,8 @@
+# Exclude development and test files
+test.js
+inspect_stream.js
+cleanup.js
+package-lock.json
+node_modules/
+.git/
+.gitignore

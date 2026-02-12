@@ -168,6 +168,7 @@ func (rh *RelayHandler) handleTCPMsgLookupPeer(payload protocol.LookupPeerPayloa
 	}
 
 	writer.WriteJSON(protocol.MsgLookupResult, protocol.LookupResultPayload{
+		Found: true,
 		Seeds: seeds,
 	})
 }

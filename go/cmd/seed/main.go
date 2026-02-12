@@ -40,6 +40,7 @@ func main() {
 	relayAddr := flag.String("relay", "", "Relay multiaddr (required)")
 	filePath := flag.String("file", "", "File to seed (required)")
 	configPath := flag.String("config", "./config/settings.conf", "Path to config file")
+	portStr := flag.Int("port", 0, "Transport port (overrides config)")
 	flag.Parse()
 
 	if *relayAddr == "" || *filePath == "" {
@@ -50,11 +51,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load config
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Printf("[seed] Warning: Could not load config: %v (using defaults)", err)
 		cfg = config.DefaultConfig()
+	}
+
+	if *portStr != 0 {
+		cfg.TransportPort = *portStr
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
@@ -320,7 +324,7 @@ func serveChunkRequest(
 
 // publishToRelay registers the file with the relay via libp2p discovery stream
 func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	s, err := h.NewStream(ctx, relayID, protocol.DiscoveryProtocolID)
@@ -329,14 +333,30 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	}
 	defer s.Close()
 
+	// Try to get public identity via STUN
+	publicIP, publicPort, err := getPublicIdentity("stun.l.google.com:19302")
+	addresses := []string{}
+	if err == nil {
+		log.Printf("[seed] Discovered public identity: %s:%d", publicIP, publicPort)
+		// Add public addresses first to prioritize them
+		addresses = append(addresses,
+			fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", publicIP, publicPort),
+			fmt.Sprintf("/ip4/%s/tcp/%d", publicIP, publicPort),
+		)
+	} else {
+		log.Printf("[seed] Warning: STUN discovery failed: %v", err)
+	}
+
+	// Add local address
+	addresses = append(addresses, fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.TransportPort))
+
 	payload := protocol.LegacyPublishFilePayload{
 		PeerID:     h.ID().String(),
 		FileHash:   manifest.FileHash,
 		FileName:   filepath.Base(filePath),
 		FileSize:   manifest.FileSize,
 		ChunkCount: manifest.TotalChunks,
-		// Advertise our MsQuic transport address
-		Addresses: []string{fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.TransportPort)},
+		Addresses:  addresses,
 	}
 
 	msg, err := protocol.NewMessage(protocol.LegacyMsgPublishFile, payload)
@@ -368,8 +388,56 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 		return fmt.Errorf("relay error: %s", errorPayload.Message)
 	}
 
-	log.Printf("[seed] Published successfully to relay.")
+	log.Printf("[seed] Published successfully to relay (with %d addresses).", len(addresses))
 	return nil
+}
+
+// getPublicIdentity queries a STUN server to find the external IP and port
+func getPublicIdentity(stunServer string) (string, int, error) {
+	conn, err := net.Dial("udp", stunServer)
+	if err != nil {
+		return "", 0, err
+	}
+	defer conn.Close()
+
+	// STUN Binding Request (20 bytes)
+	// [0-1] Type, [2-3] Length, [4-7] Magic Cookie, [8-19] Transaction ID
+	message := make([]byte, 20)
+	message[0], message[1] = 0x00, 0x01
+	message[2], message[3] = 0x00, 0x00
+	message[4], message[5], message[6], message[7] = 0x21, 0x12, 0xA4, 0x42
+	for i := 8; i < 20; i++ {
+		message[i] = byte(i + 42)
+	}
+
+	if _, err := conn.Write(message); err != nil {
+		return "", 0, err
+	}
+
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp := make([]byte, 1024)
+	n, err := conn.Read(resp)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Parse Attributes (starting at offset 20)
+	offset := 20
+	for offset < n-4 {
+		attrType := uint16(resp[offset])<<8 | uint16(resp[offset+1])
+		attrLen := uint16(resp[offset+2])<<8 | uint16(resp[offset+3])
+		if attrType == 0x0020 { // XOR-MAPPED-ADDRESS
+			port := uint16(resp[offset+6])<<8 | uint16(resp[offset+7])
+			port ^= 0x2112
+			ip := make([]byte, 4)
+			for i := 0; i < 4; i++ {
+				ip[i] = resp[offset+8+i] ^ message[4+i]
+			}
+			return fmt.Sprintf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]), int(port), nil
+		}
+		offset += 4 + int(attrLen)
+	}
+	return "", 0, fmt.Errorf("XOR-MAPPED-ADDRESS attribute not found in response")
 }
 
 func sendHeartbeat(h host.Host, relayID peer.ID) error {
