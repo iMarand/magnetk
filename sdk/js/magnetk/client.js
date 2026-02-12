@@ -320,7 +320,7 @@ export class MagnetkClient extends EventEmitter {
                 });
             }
         }
-        addressesToTry.push('127.0.0.1:4002');
+        addressesToTry.push(`127.0.0.1:${this.config.seedPort}`);
 
         const uniqueAddrs = [...new Set(addressesToTry)];
         let socket;
