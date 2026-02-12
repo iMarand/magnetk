@@ -99,6 +99,35 @@ magnetk download "magnetk:?..." --output ./file.zip
 - `connection-type`: `{ type }` (DIRECT, RELAYED, LOCAL)
 - `error`: `{ code, message }`
 
+## Prerequisites
+
+The JavaScript SDK is a lightweight wrapper around the high-performance **Magnetk Go Binaries**. You must have these binaries on your system to use seeding or relay features.
+
+1.  **Download** the latest binaries for your platform (Windows/Linux/macOS).
+2.  **Ensure** they are in your system `PATH` OR provide the path manually in the SDK config.
+
+### Manual Configuration
+```javascript
+const client = new MagnetkClient({
+    seederPath: 'C:\\path\\to\\seed.exe', // Explicit path
+    relayUrl: '69.169.109.243'
+});
+```
+
+### Environment Variables
+You can also set the binary path globally:
+- `MAGNETK_SEEDER_PATH`: Path to the `seed.exe` binary.
+
+## Troubleshooting
+
+### "spawn seed.exe ENOENT" Error
+This means the SDK cannot find the Go seeder binary.
+- **Manual Path**: Pass `seederPath` and `configPath` to the `MagnetkClient` constructor.
+- **Environment**: Set `MAGNETK_SEEDER_PATH` to point to the binary.
+- **System PATH**: Ensure `seed` (Linux/Mac) or `seed.exe` (Windows) is in your PATH.
+
+#### Linux/macOS Note
+On non-Windows platforms, MsQuic requires explicit TLS certificate files. If you don't provide them in your config, the seeder will automatically generate self-signed dev certificates in the `./config/` directory on first run.
+
 ## License
 MIT
-

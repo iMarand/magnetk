@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import { fileURLToPath } from 'url';
 import { MagnetkLink } from './magnetk.js';
 
 const MSG_TYPE = {
@@ -41,6 +42,8 @@ export class MagnetkClient extends EventEmitter {
             relayPort: 4003,
             seedPort: 4002,
             enableSTUN: true,
+            seederPath: null,
+            configPath: null,
             ...config
         };
         this.processes = [];
@@ -206,7 +209,9 @@ export class MagnetkClient extends EventEmitter {
             console.warn(`[Magnetk-JS] Failed to fetch relay identity: ${e.message}. Using default/configured address might fail if Peer ID is missing.`);
         }
 
-        const binPath = this._resolveBinPath('seed.exe');
+        const isWin = process.platform === 'win32';
+        const binName = isWin ? 'seed.exe' : 'seed';
+        const binPath = this._resolveBinPath(binName);
         const configPath = this._resolveConfigPath();
 
         // Construct full multiaddr if we have the Peer ID
@@ -218,9 +223,11 @@ export class MagnetkClient extends EventEmitter {
         const args = [
             '-relay', relayMultiaddr,
             '-file', absolutePath,
-            '-port', this.config.seedPort.toString(),
-            '-config', configPath
+            '-port', this.config.seedPort.toString()
         ];
+        if (configPath) {
+            args.push('-config', configPath);
+        }
 
         console.log(`[Magnetk-JS] Spawning seeder: ${binPath} ${args.join(' ')}`);
 
@@ -405,7 +412,19 @@ export class MagnetkClient extends EventEmitter {
     }
 
     _resolveBinPath(binName) {
-        // Try to find bin in likely locations
+        const isWin = process.platform === 'win32';
+        const isSeeder = binName.includes('seed');
+
+        // 1. Check explicit config
+        if (isSeeder && this.config.seederPath) return this.config.seederPath;
+
+        // 2. Check environment variable
+        const envVar = isSeeder ? 'MAGNETK_SEEDER_PATH' : null;
+        if (envVar && process.env[envVar] && fs.existsSync(process.env[envVar])) {
+            return process.env[envVar];
+        }
+
+        // 3. Check local dev environment paths
         const paths = [
             path.join(process.cwd(), 'bin', binName),
             path.join(process.cwd(), '..', '..', '..', 'bin', binName),
@@ -415,10 +434,15 @@ export class MagnetkClient extends EventEmitter {
         for (const p of paths) {
             if (fs.existsSync(p)) return p;
         }
-        return binName; // Fallback to PATH
+
+        return binName; // Fallback to PATH (e.g. "seed" or "seed.exe")
     }
 
     _resolveConfigPath() {
+        // 1. Check explicit config
+        if (this.config.configPath) return this.config.configPath;
+
+        // 2. Check local dev environment
         const paths = [
             path.join(process.cwd(), 'config', 'settings.conf'),
             path.join(process.cwd(), '..', '..', '..', 'config', 'settings.conf'),

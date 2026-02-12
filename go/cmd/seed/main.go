@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -98,9 +99,26 @@ func main() {
 	log.Printf("[seed] LibP2P Peer ID: %s", h.ID().String())
 
 	// ===== 3. Start MsQuic transport for data =====
+	certFile := cfg.TLSCertFile
+	keyFile := cfg.TLSKeyFile
+
+	// On non-Windows platforms, we MUST have certificates for MsQuic
+	if runtime.GOOS != "windows" && (certFile == "" || keyFile == "") {
+		log.Println("[seed] No TLS certificates found, generating dev certificates...")
+		c, k, err := config.EnsureDevCertificates("./config/dev_cert.pem", "./config/dev_key.pem")
+		if err != nil {
+			log.Printf("[seed] Warning: Failed to generate dev certificates: %v", err)
+		} else {
+			certFile = c
+			keyFile = k
+		}
+	}
+
 	transportCfg := transport.Config{
 		BindAddress:       cfg.EffectiveBindAddress(),
 		Port:              uint16(cfg.TransportPort),
+		CertFile:          certFile,
+		KeyFile:           keyFile,
 		NoCertValidation:  cfg.NoCertValidation,
 		ALPN:              "magnetk",
 		MaxConnections:    uint32(cfg.MaxConnections),
