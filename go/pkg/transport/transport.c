@@ -503,7 +503,7 @@ MAGNETK_API magnetk_status_t magnetk_listen(
             QuicAddrSetPort(&addr, transport->cfg.port);
         }
     } else {
-        QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+        QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_INET);
         QuicAddrSetPort(&addr, transport->cfg.port);
     }
 
@@ -514,7 +514,10 @@ MAGNETK_API magnetk_status_t magnetk_listen(
     if (QUIC_FAILED(status)) {
         fprintf(stderr, "[magnetk] ListenerStart failed with 0x%x on port %d\n", status, transport->cfg.port);
         if (status == 0x80070005) fprintf(stderr, "[magnetk] Hint: Access Denied. Port might be privileged or restricted.\n");
-        if (status == 0x80070030 || status == 0x62) fprintf(stderr, "[magnetk] Hint: Port already in use (EADDRINUSE).\n");
+        if (status == 0x80070030 || status == 0x62) {
+            fprintf(stderr, "[magnetk] Hint: Port already in use (EADDRINUSE).\n");
+            fprintf(stderr, "[magnetk] Try: 'fuser -k %d/udp' or change the port in config.\n", transport->cfg.port);
+        }
         transport->msquic->ListenerClose(listener->handle);
         free(listener);
         return MAGNETK_ERR_LISTEN;
@@ -530,6 +533,21 @@ MAGNETK_API void magnetk_listener_close(magnetk_listener_t* listener) {
         listener->transport->msquic->ListenerClose(listener->handle);
     }
     free(listener);
+}
+
+MAGNETK_API uint16_t magnetk_listener_get_port(magnetk_listener_t* listener) {
+    if (!listener || !listener->handle) return 0;
+    
+    QUIC_ADDR addr = {0};
+    uint32_t addr_len = sizeof(addr);
+    QUIC_STATUS status = listener->transport->msquic->GetParam(
+        listener->handle,
+        QUIC_PARAM_LISTENER_LOCAL_ADDRESS,
+        &addr_len,
+        &addr);
+        
+    if (QUIC_FAILED(status)) return 0;
+    return QuicAddrGetPort(&addr);
 }
 
 /* ===== Server Connection Callback ===== */

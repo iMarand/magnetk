@@ -88,6 +88,14 @@ func (l *Listener) Close() {
 	C.magnetk_listener_close(l.handle)
 }
 
+// Port returns the actual port the listener is bound to.
+func (l *Listener) Port() uint16 {
+	if l.handle == nil {
+		return 0
+	}
+	return uint16(C.magnetk_listener_get_port(l.handle))
+}
+
 // ===== CGo callback registry =====
 // We need a way to map C void* back to Go objects.
 // This uses a simple ID → pointer map protected by a mutex.

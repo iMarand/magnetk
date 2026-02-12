@@ -144,12 +144,12 @@ func main() {
 	}
 	defer listener.Close()
 
-	log.Printf("[seed] MsQuic data transport on port %d", cfg.TransportPort)
+	log.Printf("[seed] MsQuic data transport on port %d", listener.Port())
 
 	// Add TCP Listener for JS SDK / Legacy clients (Fallback Transport)
 	// This allows pure Node.js clients to connect without C++ bindings
 	go func() {
-		tcpAddr := fmt.Sprintf("%s:%d", cfg.EffectiveBindAddress(), cfg.TransportPort)
+		tcpAddr := fmt.Sprintf("%s:%d", cfg.EffectiveBindAddress(), listener.Port())
 		tcpListener, err := net.Listen("tcp", tcpAddr)
 		if err != nil {
 			log.Printf("[seed] Warning: Failed to start TCP listener (JS SDK might not work): %v", err)
@@ -184,7 +184,7 @@ func main() {
 	log.Println("[seed] Connected to relay")
 
 	// Register with relay
-	err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg)
+	err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg, listener.Port())
 	if err != nil {
 		log.Fatalf("[seed] Failed to publish file: %v", err)
 	}
@@ -341,7 +341,7 @@ func serveChunkRequest(
 }
 
 // publishToRelay registers the file with the relay via libp2p discovery stream
-func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config) error {
+func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config, actualPort uint16) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -358,15 +358,15 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 		log.Printf("[seed] Discovered public identity: %s:%d", publicIP, publicPort)
 		// Add public addresses first to prioritize them
 		addresses = append(addresses,
-			fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", publicIP, publicPort),
-			fmt.Sprintf("/ip4/%s/tcp/%d", publicIP, publicPort),
+			fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", publicIP, actualPort), // Use actualPort here
+			fmt.Sprintf("/ip4/%s/tcp/%d", publicIP, actualPort),
 		)
 	} else {
 		log.Printf("[seed] Warning: STUN discovery failed: %v", err)
 	}
 
 	// Add local address
-	addresses = append(addresses, fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.TransportPort))
+	addresses = append(addresses, fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), actualPort))
 
 	payload := protocol.LegacyPublishFilePayload{
 		PeerID:     h.ID().String(),
