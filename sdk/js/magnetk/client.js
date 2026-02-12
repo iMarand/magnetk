@@ -225,7 +225,7 @@ export class MagnetkClient extends EventEmitter {
             '-file', absolutePath,
             '-port', this.config.seedPort.toString()
         ];
-        if (configPath) {
+        if (configPath && configPath.trim().length > 0) {
             args.push('-config', configPath);
         }
 

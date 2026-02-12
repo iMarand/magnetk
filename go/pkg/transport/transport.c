@@ -474,20 +474,36 @@ MAGNETK_API magnetk_status_t magnetk_listen(
         listener,
         &listener->handle);
     if (QUIC_FAILED(status)) {
+        fprintf(stderr, "[magnetk] ListenerOpen failed: 0x%x\n", status);
         free(listener);
         return MAGNETK_ERR_LISTEN;
     }
 
     /* Build address */
     QUIC_ADDR addr = {0};
-    QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
-    QuicAddrSetPort(&addr, transport->cfg.port);
+    if (transport->cfg.bind_address && 
+        strlen(transport->cfg.bind_address) > 0 && 
+        strcmp(transport->cfg.bind_address, "0.0.0.0") != 0 &&
+        strcmp(transport->cfg.bind_address, "*") != 0) {
+        
+        if (!QuicAddrFromString(transport->cfg.bind_address, transport->cfg.port, &addr)) {
+            fprintf(stderr, "[magnetk] Failed to parse bind_address: %s\n", transport->cfg.bind_address);
+            QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+            QuicAddrSetPort(&addr, transport->cfg.port);
+        }
+    } else {
+        QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+        QuicAddrSetPort(&addr, transport->cfg.port);
+    }
 
     status = transport->msquic->ListenerStart(
         listener->handle,
         &transport->alpn, 1,
         &addr);
     if (QUIC_FAILED(status)) {
+        fprintf(stderr, "[magnetk] ListenerStart failed with 0x%x on port %d\n", status, transport->cfg.port);
+        if (status == 0x80070005) fprintf(stderr, "[magnetk] Hint: Access Denied. Port might be privileged or restricted.\n");
+        if (status == 0x80070030) fprintf(stderr, "[magnetk] Hint: Port already in use.\n");
         transport->msquic->ListenerClose(listener->handle);
         free(listener);
         return MAGNETK_ERR_LISTEN;
