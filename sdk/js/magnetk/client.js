@@ -53,17 +53,6 @@ export class MagnetkClient extends EventEmitter {
             duration: 0,
             bytesReceived: 0
         };
-
-        // Ensure processes are killed on parent exit
-        process.on('exit', () => this.stop());
-        process.on('SIGINT', () => {
-            this.stop();
-            process.exit();
-        });
-        process.on('SIGTERM', () => {
-            this.stop();
-            process.exit();
-        });
     }
 
     /**
@@ -234,11 +223,9 @@ export class MagnetkClient extends EventEmitter {
         const args = [
             '-relay', relayMultiaddr,
             '-file', absolutePath,
-            '-port', this.config.seedPort.toString()
+            '-port', this.config.seedPort.toString(),
+            '-config', configPath
         ];
-        if (configPath && configPath.trim().length > 0) {
-            args.push('-config', configPath);
-        }
 
         console.log(`[Magnetk-JS] Spawning seeder: ${binPath} ${args.join(' ')}`);
 
@@ -295,7 +282,7 @@ export class MagnetkClient extends EventEmitter {
      * Stops all active seeding processes.
      */
     stop() {
-        this.processes.forEach(p => p.kill('SIGKILL'));
+        this.processes.forEach(p => p.kill());
         this.processes = [];
     }
 

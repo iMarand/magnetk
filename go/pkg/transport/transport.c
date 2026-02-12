@@ -215,12 +215,8 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
     magnetk_transport_t* t = (magnetk_transport_t*)calloc(1, sizeof(magnetk_transport_t));
     if (!t) return MAGNETK_ERR_MEMORY;
 
-    /* Copy config and deep-copy strings */
+    /* Copy config */
     t->cfg = *config;
-    if (config->bind_address) t->cfg.bind_address = strdup(config->bind_address);
-    if (config->cert_file) t->cfg.cert_file = strdup(config->cert_file);
-    if (config->key_file) t->cfg.key_file = strdup(config->key_file);
-    if (config->alpn) t->cfg.alpn = strdup(config->alpn);
 
     /* Open MsQuic API */
     QUIC_STATUS status = MsQuicOpen2(&t->msquic);
@@ -396,13 +392,6 @@ MAGNETK_API void magnetk_transport_shutdown(magnetk_transport_t* transport) {
     if (transport->config_server) transport->msquic->ConfigurationClose(transport->config_server);
     if (transport->registration) transport->msquic->RegistrationClose(transport->registration);
     if (transport->msquic) MsQuicClose(transport->msquic);
-    
-    /* Free deep-copied strings */
-    if (transport->cfg.bind_address) free((void*)transport->cfg.bind_address);
-    if (transport->cfg.cert_file) free((void*)transport->cfg.cert_file);
-    if (transport->cfg.key_file) free((void*)transport->cfg.key_file);
-    if (transport->cfg.alpn) free((void*)transport->cfg.alpn);
-    
     free(transport);
 }
 
@@ -485,39 +474,20 @@ MAGNETK_API magnetk_status_t magnetk_listen(
         listener,
         &listener->handle);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnetk] ListenerOpen failed: 0x%x\n", status);
         free(listener);
         return MAGNETK_ERR_LISTEN;
     }
 
     /* Build address */
     QUIC_ADDR addr = {0};
-    if (transport->cfg.bind_address && 
-        strlen(transport->cfg.bind_address) > 0 && 
-        strcmp(transport->cfg.bind_address, "0.0.0.0") != 0 &&
-        strcmp(transport->cfg.bind_address, "*") != 0) {
-        
-        if (!QuicAddrFromString(transport->cfg.bind_address, transport->cfg.port, &addr)) {
-            fprintf(stderr, "[magnetk] Failed to parse bind_address: %s\n", transport->cfg.bind_address);
-            QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
-            QuicAddrSetPort(&addr, transport->cfg.port);
-        }
-    } else {
-        QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_INET);
-        QuicAddrSetPort(&addr, transport->cfg.port);
-    }
+    QuicAddrSetFamily(&addr, QUIC_ADDRESS_FAMILY_UNSPEC);
+    QuicAddrSetPort(&addr, transport->cfg.port);
 
     status = transport->msquic->ListenerStart(
         listener->handle,
         &transport->alpn, 1,
         &addr);
     if (QUIC_FAILED(status)) {
-        fprintf(stderr, "[magnetk] ListenerStart failed with 0x%x on port %d\n", status, transport->cfg.port);
-        if (status == 0x80070005) fprintf(stderr, "[magnetk] Hint: Access Denied. Port might be privileged or restricted.\n");
-        if (status == 0x80070030 || status == 0x62) {
-            fprintf(stderr, "[magnetk] Hint: Port already in use (EADDRINUSE).\n");
-            fprintf(stderr, "[magnetk] Try: 'fuser -k %d/udp' or change the port in config.\n", transport->cfg.port);
-        }
         transport->msquic->ListenerClose(listener->handle);
         free(listener);
         return MAGNETK_ERR_LISTEN;
@@ -533,21 +503,6 @@ MAGNETK_API void magnetk_listener_close(magnetk_listener_t* listener) {
         listener->transport->msquic->ListenerClose(listener->handle);
     }
     free(listener);
-}
-
-MAGNETK_API uint16_t magnetk_listener_get_port(magnetk_listener_t* listener) {
-    if (!listener || !listener->handle) return 0;
-    
-    QUIC_ADDR addr = {0};
-    uint32_t addr_len = sizeof(addr);
-    QUIC_STATUS status = listener->transport->msquic->GetParam(
-        listener->handle,
-        QUIC_PARAM_LISTENER_LOCAL_ADDRESS,
-        &addr_len,
-        &addr);
-        
-    if (QUIC_FAILED(status)) return 0;
-    return QuicAddrGetPort(&addr);
 }
 
 /* ===== Server Connection Callback ===== */

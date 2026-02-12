@@ -154,11 +154,6 @@ MAGNETK_API void magnetk_listener_close(
     magnetk_listener_t*    listener
 );
 
-/* Get the actual bound port of the listener. */
-MAGNETK_API uint16_t magnetk_listener_get_port(
-    magnetk_listener_t*    listener
-);
-
 /* ===== Connection (Client Side) ===== */
 
 /* Connect to a remote server. Blocking until connected or timeout. */

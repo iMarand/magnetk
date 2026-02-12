@@ -122,12 +122,10 @@ You can also set the binary path globally:
 
 ### "spawn seed.exe ENOENT" Error
 This means the SDK cannot find the Go seeder binary.
-- **Manual Path**: Pass `seederPath` and `configPath` to the `MagnetkClient` constructor.
-- **Environment**: Set `MAGNETK_SEEDER_PATH` to point to the binary.
-- **System PATH**: Ensure `seed` (Linux/Mac) or `seed.exe` (Windows) is in your PATH.
-
-#### Linux/macOS Note
-On non-Windows platforms, MsQuic requires explicit TLS certificate files. If you don't provide them in your config, the seeder will automatically generate self-signed dev certificates in the `./config/` directory on first run.
+1. Check if `seed.exe` is in your system `PATH`.
+2. Or provide `seederPath` in the `MagnetkClient` constructor.
+3. Or set the `MAGNETK_SEEDER_PATH` environment variable.
 
 ## License
 MIT
+
