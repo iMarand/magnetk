@@ -215,8 +215,12 @@ MAGNETK_API magnetk_status_t magnetk_transport_init(
     magnetk_transport_t* t = (magnetk_transport_t*)calloc(1, sizeof(magnetk_transport_t));
     if (!t) return MAGNETK_ERR_MEMORY;
 
-    /* Copy config */
+    /* Copy config and deep-copy strings */
     t->cfg = *config;
+    if (config->bind_address) t->cfg.bind_address = strdup(config->bind_address);
+    if (config->cert_file) t->cfg.cert_file = strdup(config->cert_file);
+    if (config->key_file) t->cfg.key_file = strdup(config->key_file);
+    if (config->alpn) t->cfg.alpn = strdup(config->alpn);
 
     /* Open MsQuic API */
     QUIC_STATUS status = MsQuicOpen2(&t->msquic);
@@ -392,6 +396,13 @@ MAGNETK_API void magnetk_transport_shutdown(magnetk_transport_t* transport) {
     if (transport->config_server) transport->msquic->ConfigurationClose(transport->config_server);
     if (transport->registration) transport->msquic->RegistrationClose(transport->registration);
     if (transport->msquic) MsQuicClose(transport->msquic);
+    
+    /* Free deep-copied strings */
+    if (transport->cfg.bind_address) free((void*)transport->cfg.bind_address);
+    if (transport->cfg.cert_file) free((void*)transport->cfg.cert_file);
+    if (transport->cfg.key_file) free((void*)transport->cfg.key_file);
+    if (transport->cfg.alpn) free((void*)transport->cfg.alpn);
+    
     free(transport);
 }
 
@@ -503,7 +514,7 @@ MAGNETK_API magnetk_status_t magnetk_listen(
     if (QUIC_FAILED(status)) {
         fprintf(stderr, "[magnetk] ListenerStart failed with 0x%x on port %d\n", status, transport->cfg.port);
         if (status == 0x80070005) fprintf(stderr, "[magnetk] Hint: Access Denied. Port might be privileged or restricted.\n");
-        if (status == 0x80070030) fprintf(stderr, "[magnetk] Hint: Port already in use.\n");
+        if (status == 0x80070030 || status == 0x62) fprintf(stderr, "[magnetk] Hint: Port already in use (EADDRINUSE).\n");
         transport->msquic->ListenerClose(listener->handle);
         free(listener);
         return MAGNETK_ERR_LISTEN;
