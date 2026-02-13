@@ -160,15 +160,19 @@ func (rh *RelayHandler) handleTCPMsgLookupPeer(payload protocol.LookupPeerPayloa
 
 	seeds := make([]protocol.SeedInfo, 0, len(entry.Seeds))
 	for _, s := range entry.Seeds {
-		// Try to find the MsQuic address in s.Addresses
+		// Try to find address - prefer tcp, fallback to quic-v1
 		transportAddr := ""
 		for _, addr := range s.Addresses {
-			if strings.Contains(addr, "/quic-v1") {
-				parts := strings.Split(addr, "/")
-				if len(parts) >= 5 {
+			parts := strings.Split(addr, "/")
+			// Check for /ip4/HOST/tcp/PORT or /ip4/HOST/udp/PORT/quic-v1
+			if len(parts) >= 5 && parts[1] == "ip4" {
+				if parts[3] == "tcp" {
 					transportAddr = fmt.Sprintf("%s:%s", parts[2], parts[4])
+					break // Prefer TCP
+				} else if parts[3] == "udp" && len(parts) >= 7 && parts[5] == "quic-v1" {
+					transportAddr = fmt.Sprintf("%s:%s", parts[2], parts[4])
+					// Don't break, keep looking for TCP
 				}
-				break
 			}
 		}
 
