@@ -20,6 +20,12 @@ echo.
 REM Create output directory
 if not exist "bin" mkdir bin
 
+# Tidy dependencies
+echo Tidying Go modules...
+cd go
+go mod tidy
+cd ..
+
 REM Build binaries
 echo Building relay node...
 cd go

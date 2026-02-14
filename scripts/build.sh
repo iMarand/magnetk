@@ -23,6 +23,12 @@ cd "$(dirname "$0")/.."
 # Create output directory
 mkdir -p bin
 
+# Tidy dependencies
+echo "Tidying Go modules..."
+cd go
+go mod tidy
+cd ..
+
 # Build relay node
 echo "Building relay node..."
 cd go
