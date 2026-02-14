@@ -24,6 +24,7 @@ import (
 
 	"magnetk/pkg/buffer"
 	"magnetk/pkg/config"
+	magnetkDHT "magnetk/pkg/dht"
 	"magnetk/pkg/handler"
 	"magnetk/pkg/registry"
 	"magnetk/pkg/transport"
@@ -34,13 +35,18 @@ func main() {
 	bindAddr := flag.String("bind", "", "Override bind address")
 	transportPort := flag.Int("port", 0, "Override transport port")
 	discoveryPort := flag.Int("discovery-port", 0, "Override discovery port")
+	enableDHT := flag.Bool("dht", false, "Enable DHT server mode (relay acts as bootstrap node)")
 	flag.Parse()
 
-	// Load config
-	cfg, err := config.Load(*configPath)
+	// Auto-create config if not found
+	cfg, err := config.LoadOrCreate(*configPath)
 	if err != nil {
-		log.Printf("[relay] Warning: Could not load config from %s: %v (using defaults)", *configPath, err)
+		log.Printf("[relay] Warning: Config issue: %v (using defaults)", err)
 		cfg = config.DefaultConfig()
+	}
+
+	if *enableDHT {
+		cfg.DHTEnabled = true
 	}
 
 	// Apply overrides
@@ -154,6 +160,32 @@ func main() {
 		}
 	}()
 
+	// ===== 4.6 Initialize DHT (if enabled) =====
+	if cfg.DHTEnabled {
+		log.Println("[relay] Initializing DHT in server mode (bootstrap node)...")
+		dhtCfg := &magnetkDHT.Config{
+			Mode:               "server",
+			BootstrapPeers:     cfg.DHTBootstrapPeers,
+			ReannounceInterval: time.Duration(cfg.DHTReannounceIntervalMin) * time.Minute,
+		}
+		dhtNode, err := magnetkDHT.New(h, dhtCfg)
+		if err != nil {
+			log.Printf("[relay] Warning: Failed to initialize DHT: %v", err)
+		} else {
+			defer dhtNode.Close()
+			if err := dhtNode.Bootstrap(); err != nil {
+				log.Printf("[relay] Warning: DHT bootstrap partially failed: %v", err)
+			}
+			log.Printf("[relay] DHT server mode active (routing table: %d peers)", dhtNode.RoutingTableSize())
+			log.Println("[relay] This relay is now a DHT bootstrap node")
+
+			// Print bootstrap address for users to configure
+			for _, addr := range h.Addrs() {
+				log.Printf("[relay] DHT bootstrap address: %s/p2p/%s", addr, h.ID().String())
+			}
+		}
+	}
+
 	// ===== 5. Start stats printer =====
 	go printStats(reg, h)
 
@@ -163,6 +195,9 @@ func main() {
 	fmt.Printf("[relay] Environment: %s\n", cfg.Env)
 	if cfg.LocalhostMode {
 		fmt.Println("[relay] ⚠  Running in LOCALHOST mode (127.0.0.1 only)")
+	}
+	if cfg.DHTEnabled {
+		fmt.Println("[relay] ✓ DHT bootstrap node active")
 	}
 	fmt.Println()
 

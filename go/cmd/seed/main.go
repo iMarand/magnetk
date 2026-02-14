@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,30 +32,59 @@ import (
 
 	"magnetk/pkg/chunk"
 	"magnetk/pkg/config"
+	magnetkDHT "magnetk/pkg/dht"
 	magnetkLink "magnetk/pkg/magnetk"
 	"magnetk/pkg/protocol"
 	"magnetk/pkg/transport"
 )
 
 func main() {
-	relayAddr := flag.String("relay", "", "Relay multiaddr (required)")
+	relayAddr := flag.String("relay", "", "Relay multiaddr (optional when --dht is enabled)")
 	filePath := flag.String("file", "", "File to seed (required)")
 	configPath := flag.String("config", "./config/settings.conf", "Path to config file")
 	portStr := flag.Int("port", 0, "Transport port (overrides config)")
+	enableDHT := flag.Bool("dht", false, "Enable DHT for decentralized discovery")
+	discoveryMode := flag.String("discovery", "auto", "Discovery mode: dht, relay, hybrid, auto")
+	bootstrapPeers := flag.String("bootstrap", "", "Comma-separated DHT bootstrap peer multiaddrs")
 	flag.Parse()
 
-	if *relayAddr == "" || *filePath == "" {
-		fmt.Println("Usage: seed --relay <relay_multiaddr> --file <file_path>")
-		fmt.Println("  --relay  Relay node multiaddr (e.g., /ip4/127.0.0.1/tcp/4001/p2p/<peerID>)")
-		fmt.Println("  --file   Path to the file to share")
+	if *filePath == "" {
+		fmt.Println("Usage: seed --file <file_path> [--relay <relay_multiaddr>] [--dht]")
+		fmt.Println("  --file       Path to the file to share (required)")
+		fmt.Println("  --relay      Relay node multiaddr (optional with --dht)")
+		fmt.Println("  --dht        Enable DHT for decentralized discovery")
+		fmt.Println("  --discovery  Discovery mode: dht, relay, hybrid, auto (default: auto)")
+		fmt.Println("  --bootstrap  Comma-separated DHT bootstrap peer multiaddrs")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	cfg, err := config.Load(*configPath)
+	// Require at least one discovery method
+	if *relayAddr == "" && !*enableDHT {
+		fmt.Println("Error: Must specify --relay or --dht (or both for hybrid mode)")
+		os.Exit(1)
+	}
+
+	// Auto-create config if not found
+	cfg, err := config.LoadOrCreate(*configPath)
 	if err != nil {
-		log.Printf("[seed] Warning: Could not load config: %v (using defaults)", err)
+		log.Printf("[seed] Warning: Config issue: %v (using defaults)", err)
 		cfg = config.DefaultConfig()
+	}
+
+	// Apply CLI overrides to config
+	if *enableDHT {
+		cfg.DHTEnabled = true
+	}
+	if *discoveryMode != "auto" {
+		cfg.DHTMode = *discoveryMode
+	}
+	if *bootstrapPeers != "" {
+		peers := strings.Split(*bootstrapPeers, ",")
+		for i := range peers {
+			peers[i] = strings.TrimSpace(peers[i])
+		}
+		cfg.DHTBootstrapPeers = peers
 	}
 
 	if *portStr != 0 {
@@ -162,35 +192,69 @@ func main() {
 		}
 	}()
 
-	// ===== 4. Connect to relay and publish file =====
-	relayMA, err := multiaddr.NewMultiaddr(*relayAddr)
-	if err != nil {
-		log.Fatalf("[seed] Invalid relay address: %v", err)
+	// ===== 4. Initialize DHT (if enabled) =====
+	var dhtNode *magnetkDHT.DHT
+	if cfg.DHTEnabled {
+		log.Println("[seed] Initializing DHT for decentralized discovery...")
+		dhtCfg := &magnetkDHT.Config{
+			Mode:               "server",
+			BootstrapPeers:     cfg.DHTBootstrapPeers,
+			ReannounceInterval: time.Duration(cfg.DHTReannounceIntervalMin) * time.Minute,
+		}
+		dhtNode, err = magnetkDHT.New(h, dhtCfg)
+		if err != nil {
+			log.Fatalf("[seed] Failed to create DHT: %v", err)
+		}
+		defer dhtNode.Close()
+
+		if err := dhtNode.Bootstrap(); err != nil {
+			log.Printf("[seed] Warning: DHT bootstrap partially failed: %v", err)
+		}
+
+		// Announce file to DHT
+		if err := dhtNode.Announce(manifest.FileHash); err != nil {
+			log.Printf("[seed] Warning: DHT announce failed: %v", err)
+		} else {
+			log.Printf("[seed] File announced to DHT: %s", manifest.FileHash[:12])
+		}
 	}
 
-	relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
-	if err != nil {
-		log.Fatalf("[seed] Failed to parse relay peer info: %v", err)
-	}
+	// ===== 5. Connect to relay and publish file (if relay provided) =====
+	var relayID peer.ID
+	if *relayAddr != "" {
+		relayMA, err := multiaddr.NewMultiaddr(*relayAddr)
+		if err != nil {
+			log.Fatalf("[seed] Invalid relay address: %v", err)
+		}
 
-	if err := h.Connect(context.Background(), *relayInfo); err != nil {
-		log.Fatalf("[seed] Failed to connect to relay: %v", err)
-	}
-	log.Println("[seed] Connected to relay")
+		relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
+		if err != nil {
+			log.Fatalf("[seed] Failed to parse relay peer info: %v", err)
+		}
 
-	// Register with relay
-	err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg)
-	if err != nil {
-		log.Fatalf("[seed] Failed to publish file: %v", err)
+		if err := h.Connect(context.Background(), *relayInfo); err != nil {
+			log.Fatalf("[seed] Failed to connect to relay: %v", err)
+		}
+		log.Println("[seed] Connected to relay")
+
+		// Register with relay
+		err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg)
+		if err != nil {
+			log.Fatalf("[seed] Failed to publish file: %v", err)
+		}
+		relayID = relayInfo.ID
+	} else {
+		log.Println("[seed] No relay specified - using DHT-only discovery")
 	}
 
 	// Generate magnet link
 	ml := &magnetkLink.MagnetLink{
-		FileHash:  manifest.FileHash,
-		FileName:  filepath.Base(*filePath),
-		FileSize:  manifest.FileSize,
-		SeedID:    h.ID().String(),
-		RelayAddr: *relayAddr,
+		FileHash:   manifest.FileHash,
+		FileName:   filepath.Base(*filePath),
+		FileSize:   manifest.FileSize,
+		SeedID:     h.ID().String(),
+		RelayAddr:  *relayAddr,
+		DHTEnabled: cfg.DHTEnabled,
 	}
 
 	fmt.Println()
@@ -199,22 +263,29 @@ func main() {
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 	fmt.Printf("  Magnetk Link: %s\n\n", ml.String())
+	if cfg.DHTEnabled {
+		fmt.Println("  Discovery: DHT (decentralized)")
+	}
+	if *relayAddr != "" {
+		fmt.Println("  Discovery: Relay (centralized)")
+	}
 	fmt.Println("  Share this link to allow others to download!")
 	fmt.Println()
 
-	// ===== 5. Heartbeat loop =====
-	go func() {
-		ticker := time.NewTicker(time.Duration(cfg.PingIntervalSec) * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			// Send heartbeat to relay
-			if err := sendHeartbeat(h, relayInfo.ID); err != nil {
-				log.Printf("[seed] Heartbeat failed: %v", err)
+	// ===== 6. Heartbeat loop (relay only) =====
+	if *relayAddr != "" {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.PingIntervalSec) * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := sendHeartbeat(h, relayID); err != nil {
+					log.Printf("[seed] Heartbeat failed: %v", err)
+				}
 			}
-		}
-	}()
+		}()
+	}
 
-	// ===== 6. Wait for shutdown =====
+	// ===== 7. Wait for shutdown =====
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
@@ -349,7 +420,7 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	// Determine advertised address
 	addresses := []string{}
 	advertisedAddr := cfg.BindAddress
-	
+
 	if cfg.AdvertisedAddress != "" {
 		// Use configured advertised address (e.g., VPS public IP)
 		advertisedAddr = cfg.AdvertisedAddress
@@ -364,13 +435,13 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 			log.Printf("[seed] Warning: No advertised address configured and STUN failed, using bind address")
 		}
 	}
-	
+
 	// Add advertised addresses
 	addresses = append(addresses,
 		fmt.Sprintf("/ip4/%s/tcp/%d", advertisedAddr, cfg.TransportPort),
 		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", advertisedAddr, cfg.TransportPort),
 	)
-	
+
 	log.Printf("[seed] Publishing addresses: %v", addresses)
 
 	payload := protocol.LegacyPublishFilePayload{

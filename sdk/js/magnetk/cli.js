@@ -20,7 +20,9 @@ if (!command || command === '--help' || command === '-h' || command === 'help') 
     process.exit(0);
 }
 
-const client = new MagnetkClient();
+const client = new MagnetkClient({
+    dhtEnabled: true // Enable DHT discovery
+});
 
 async function run() {
     try {

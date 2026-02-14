@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 
 	"magnetk/pkg/chunk"
 	"magnetk/pkg/config"
+	magnetkDHT "magnetk/pkg/dht"
 	magnetkLink "magnetk/pkg/magnetk"
 	"magnetk/pkg/protocol"
 	"magnetk/pkg/state"
@@ -40,24 +42,45 @@ func main() {
 	relayAddr := flag.String("relay", "", "Relay multiaddr (if not in magnet link)")
 	outputPath := flag.String("output", "", "Output file path (default: current directory)")
 	configPath := flag.String("config", "./config/settings.conf", "Path to config file")
+	enableDHT := flag.Bool("dht", false, "Enable DHT discovery")
+	discoveryMode := flag.String("discovery", "auto", "Discovery mode: dht, relay, hybrid, auto")
+	bootstrapPeers := flag.String("bootstrap", "", "Comma-separated DHT bootstrap peer multiaddrs")
 	flag.Parse()
 
 	if *magnetURI == "" {
-		fmt.Println("Usage: peer --magnetk <magnet_link> [--output <path>] [--relay <addr>]")
+		fmt.Println("Usage: peer --magnetk <magnet_link> [--output <path>] [--relay <addr>] [--dht]")
 		fmt.Println()
 		fmt.Println("Options:")
-		fmt.Println("  --magnetk   Magnet link (required)")
-		fmt.Println("  --output   Output file path (default: filename from magnet)")
-		fmt.Println("  --relay    Override relay address")
+		fmt.Println("  --magnetk    Magnet link (required)")
+		fmt.Println("  --output     Output file path (default: filename from magnet)")
+		fmt.Println("  --relay      Override relay address")
+		fmt.Println("  --dht        Enable DHT discovery")
+		fmt.Println("  --discovery  Discovery mode: dht, relay, hybrid, auto")
+		fmt.Println("  --bootstrap  Comma-separated DHT bootstrap peer multiaddrs")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	// Load config
-	cfg, err := config.Load(*configPath)
+	// Auto-create config if not found
+	cfg, err := config.LoadOrCreate(*configPath)
 	if err != nil {
-		log.Printf("[peer] Warning: Could not load config: %v (using defaults)", err)
+		log.Printf("[peer] Warning: Config issue: %v (using defaults)", err)
 		cfg = config.DefaultConfig()
+	}
+
+	// Apply CLI overrides
+	if *enableDHT {
+		cfg.DHTEnabled = true
+	}
+	if *discoveryMode != "auto" {
+		cfg.DHTMode = *discoveryMode
+	}
+	if *bootstrapPeers != "" {
+		peers := strings.Split(*bootstrapPeers, ",")
+		for i := range peers {
+			peers[i] = strings.TrimSpace(peers[i])
+		}
+		cfg.DHTBootstrapPeers = peers
 	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
@@ -78,13 +101,20 @@ func main() {
 		log.Printf("[peer] Size: %d bytes", ml.FileSize)
 	}
 
-	// Determine relay address
+	// Determine relay address(es)
 	relay := ml.RelayAddr
 	if *relayAddr != "" {
 		relay = *relayAddr
 	}
-	if relay == "" {
-		log.Fatal("[peer] No relay address available. Provide via --relay or in magnet link.")
+
+	// Enable DHT if magnet link has dht=true
+	if ml.DHTEnabled {
+		cfg.DHTEnabled = true
+	}
+
+	// Must have at least one discovery method
+	if relay == "" && !cfg.DHTEnabled {
+		log.Fatal("[peer] No discovery method available. Use --relay, --dht, or a DHT-enabled magnet link.")
 	}
 
 	// Determine output path
@@ -104,7 +134,7 @@ func main() {
 			len(existingState.CompletedChunks), existingState.TotalChunks)
 	}
 
-	// ===== 3. Start libp2p for relay discovery =====
+	// ===== 3. Start libp2p for discovery =====
 	listenAddr := fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress())
 	h, err := libp2p.New(
 		libp2p.ListenAddrStrings(listenAddr),
@@ -118,24 +148,27 @@ func main() {
 
 	log.Printf("[peer] Peer ID: %s", h.ID().String())
 
-	// ===== 4. Connect to relay =====
-	relayMA, err := multiaddr.NewMultiaddr(relay)
-	if err != nil {
-		log.Fatalf("[peer] Invalid relay address: %v", err)
+	// ===== 4. Initialize DHT (if enabled) =====
+	var dhtNode *magnetkDHT.DHT
+	if cfg.DHTEnabled {
+		log.Println("[peer] Initializing DHT for discovery...")
+		dhtCfg := &magnetkDHT.Config{
+			Mode:           "client",
+			BootstrapPeers: cfg.DHTBootstrapPeers,
+		}
+		dhtNode, err = magnetkDHT.New(h, dhtCfg)
+		if err != nil {
+			log.Printf("[peer] Warning: DHT init failed: %v", err)
+		} else {
+			defer dhtNode.Close()
+			if err := dhtNode.Bootstrap(); err != nil {
+				log.Printf("[peer] Warning: DHT bootstrap partially failed: %v", err)
+			}
+		}
 	}
 
-	relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
-	if err != nil {
-		log.Fatalf("[peer] Failed to parse relay address: %v", err)
-	}
-
-	if err := h.Connect(context.Background(), *relayInfo); err != nil {
-		log.Fatalf("[peer] Failed to connect to relay: %v", err)
-	}
-	log.Println("[peer] Connected to relay")
-
-	// ===== 5. Lookup seeds =====
-	seeds, err := lookupSeeds(h, relayInfo.ID, ml.FileHash)
+	// ===== 5. Discover seeds (fallback chain) =====
+	seeds, err := discoverSeeds(h, dhtNode, relay, ml.FileHash, cfg)
 	if err != nil || len(seeds) == 0 {
 		log.Fatalf("[peer] No seeds found for file %s", ml.FileHash[:12])
 	}
@@ -391,10 +424,140 @@ func downloadFile(
 	return nil
 }
 
-func lookupSeeds(h interface{}, relayID peer.ID, fileHash string) ([]protocol.SeedInfo, error) {
-	// TODO: Implement discovery via libp2p stream to relay
-	log.Printf("[peer] Looking up seeds for %s...", fileHash[:12])
-	return nil, fmt.Errorf("no seeds found")
+// discoverSeeds tries to find seeds using the configured discovery priority.
+// Fallback chain: DHT → Relay → Direct
+func discoverSeeds(h interface{}, dhtNode *magnetkDHT.DHT, relayAddrStr string, fileHash string, cfg *config.Config) ([]protocol.SeedInfo, error) {
+	var seeds []protocol.SeedInfo
+	var lastErr error
+
+	// Determine discovery order
+	priority := cfg.DiscoveryPriority
+	if len(priority) == 0 {
+		// Auto: try DHT first if enabled, then relay
+		if cfg.DHTEnabled {
+			priority = []string{"dht", "relay", "direct"}
+		} else {
+			priority = []string{"relay", "direct"}
+		}
+	}
+
+	for _, method := range priority {
+		switch method {
+		case "dht":
+			if dhtNode == nil {
+				continue
+			}
+			log.Println("[peer] Trying DHT discovery...")
+			providers, err := dhtNode.FindProviders(fileHash, 30*time.Second)
+			if err != nil {
+				log.Printf("[peer] DHT discovery failed: %v", err)
+				lastErr = err
+				continue
+			}
+
+			// Convert DHT providers to SeedInfo
+			for _, pi := range providers {
+				// Extract best transport address from the provider's multiaddrs
+				var transportAddr string
+				var addrs []string
+				for _, addr := range pi.Addrs {
+					addrStr := addr.String()
+					addrs = append(addrs, addrStr)
+					// Extract IP from multiaddr for transport connection
+					parts := strings.Split(addrStr, "/")
+					if len(parts) >= 3 && parts[1] == "ip4" {
+						ip := parts[2]
+						// Use configured transport port (since DHT only gives discovery addresses)
+						transportAddr = fmt.Sprintf("%s:%d", ip, cfg.TransportPort)
+					}
+				}
+
+				if transportAddr != "" {
+					seeds = append(seeds, protocol.SeedInfo{
+						PeerID:        pi.ID.String(),
+						TransportAddr: transportAddr,
+						Addresses:     addrs,
+					})
+				}
+			}
+
+			if len(seeds) > 0 {
+				log.Printf("[peer] DHT discovered %d seed(s)", len(seeds))
+				return seeds, nil
+			}
+
+		case "relay":
+			if relayAddrStr == "" {
+				continue
+			}
+			log.Println("[peer] Trying relay discovery...")
+
+			// Try to connect to relay and lookup seeds
+			relaySeeds, err := lookupSeedsViaRelay(h, relayAddrStr, fileHash)
+			if err != nil {
+				log.Printf("[peer] Relay discovery failed: %v", err)
+				lastErr = err
+
+				// Try multi-relay failover
+				if len(cfg.RelayAddresses) > 0 {
+					for _, altRelay := range cfg.RelayAddresses {
+						if altRelay == relayAddrStr {
+							continue // Skip the one we already tried
+						}
+						log.Printf("[peer] Trying alternate relay: %s", altRelay)
+						relaySeeds, err = lookupSeedsViaRelay(h, altRelay, fileHash)
+						if err == nil && len(relaySeeds) > 0 {
+							break
+						}
+					}
+				}
+			}
+
+			if len(relaySeeds) > 0 {
+				log.Printf("[peer] Relay discovered %d seed(s)", len(relaySeeds))
+				return relaySeeds, nil
+			}
+
+		case "direct":
+			// Try direct connection using seed ID from magnet link
+			log.Println("[peer] Trying direct connection...")
+			// Direct connection requires knowing the seed's transport address
+			// which typically comes from DHT or relay. This is a last resort.
+			log.Println("[peer] Direct discovery: no known seed addresses")
+		}
+	}
+
+	if lastErr != nil {
+		return nil, fmt.Errorf("all discovery methods failed, last error: %w", lastErr)
+	}
+	return nil, fmt.Errorf("no seeds found via any discovery method")
+}
+
+// lookupSeedsViaRelay connects to a relay and queries for seeds of a file.
+func lookupSeedsViaRelay(h interface{}, relayAddrStr string, fileHash string) ([]protocol.SeedInfo, error) {
+	host, ok := h.(interface {
+		Connect(ctx context.Context, pi peer.AddrInfo) error
+		NewStream(ctx context.Context, p peer.ID, pids ...interface{}) (interface{}, error)
+	})
+	_ = host
+	_ = ok
+
+	// Parse relay multiaddr
+	relayMA, err := multiaddr.NewMultiaddr(relayAddrStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid relay address: %w", err)
+	}
+
+	relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse relay peer info: %w", err)
+	}
+
+	log.Printf("[peer] Looking up seeds for %s via relay %s...", fileHash[:12], relayInfo.ID.String()[:12])
+
+	// TODO: Implement full relay lookup protocol stream
+	// For now, return empty to trigger fallback
+	return nil, fmt.Errorf("relay lookup not yet implemented")
 }
 
 func parseHostPort(addr string) (string, uint16) {

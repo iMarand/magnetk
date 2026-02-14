@@ -4,7 +4,9 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -30,7 +32,7 @@ type Config struct {
 	QUICPort          int    // Kept for backward compat, maps to TransportPort
 	PingIntervalSec   int
 	RetryBackoffSec   int
-	LocalhostMode     bool   // Bind to 127.0.0.1 only
+	LocalhostMode     bool // Bind to 127.0.0.1 only
 
 	// TLS / Security
 	TLSCertFile      string // Path to TLS cert (empty = self-signed)
@@ -57,6 +59,16 @@ type Config struct {
 	// Relay-specific
 	EnableTrafficRouting bool
 	EnableAnalytics      bool
+
+	// DHT settings
+	DHTEnabled               bool     // Enable DHT discovery
+	DHTMode                  string   // "server", "client", or "auto"
+	DHTBootstrapPeers        []string // Custom bootstrap peer multiaddrs
+	DHTReannounceIntervalMin int      // Re-announce interval in minutes
+
+	// Multi-relay support
+	RelayAddresses    []string // Array of relay multiaddrs for failover/scaling
+	DiscoveryPriority []string // Discovery order: ["dht", "relay", "direct"]
 }
 
 // DefaultConfig returns a Config with default values
@@ -87,6 +99,16 @@ func DefaultConfig() *Config {
 		LogFile:                 "./magnetk.log",
 		EnableTrafficRouting:    true,
 		EnableAnalytics:         true,
+
+		// DHT defaults
+		DHTEnabled:               false,
+		DHTMode:                  "auto",
+		DHTBootstrapPeers:        nil, // Uses default IPFS bootstrap nodes
+		DHTReannounceIntervalMin: 30,
+
+		// Multi-relay defaults
+		RelayAddresses:    nil,
+		DiscoveryPriority: []string{"dht", "relay", "direct"},
 	}
 }
 
@@ -135,6 +157,138 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// LoadOrCreate loads a config file, or creates one with defaults if not found.
+// This is useful for SDKs: when a user runs share.js or share.py for the first time,
+// a settings.conf is automatically generated so they can customize it.
+func LoadOrCreate(path string) (*Config, error) {
+	// Try to load existing config
+	cfg, err := Load(path)
+	if err == nil {
+		return cfg, nil
+	}
+
+	// If file doesn't exist, create it with defaults
+	if !os.IsNotExist(unwrapErr(err)) {
+		return nil, err // Real error, not just missing file
+	}
+
+	log.Printf("[config] Config not found at %s, creating default config...", path)
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	// Write default config
+	if err := os.WriteFile(path, []byte(DefaultConfigContent()), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write default config: %w", err)
+	}
+
+	log.Printf("[config] Default config created at %s", path)
+	return DefaultConfig(), nil
+}
+
+// unwrapErr extracts the innermost error for os.IsNotExist checks.
+func unwrapErr(err error) error {
+	for {
+		inner := fmt.Errorf("%w", err)
+		if inner == err {
+			break
+		}
+		err = inner
+	}
+	// Try to find os-level error in the chain
+	if os.IsNotExist(err) {
+		return err
+	}
+	// Check if the error message indicates file not found
+	if strings.Contains(err.Error(), "cannot find") || strings.Contains(err.Error(), "no such file") {
+		return os.ErrNotExist
+	}
+	return err
+}
+
+// DefaultConfigContent returns the full default settings.conf content with documentation.
+func DefaultConfigContent() string {
+	return `# Magnetk P2P Configuration
+# All values are optional - defaults are used when not specified
+# This file was auto-generated. Edit as needed.
+
+# ===== Chunking =====
+CHUNK_SIZE_MB=1
+ADAPTIVE_CHUNKING=true
+MAX_PARALLEL_CHUNKS=10
+
+# ===== Network Binding =====
+# BIND_ADDRESS: 0.0.0.0 = all interfaces, 127.0.0.1 = localhost only
+BIND_ADDRESS=0.0.0.0
+# ADVERTISED_ADDRESS: Public IP to advertise (leave empty for STUN auto-detect)
+ADVERTISED_ADDRESS=
+DISCOVERY_PORT=4001
+TRANSPORT_PORT=4002
+LOCALHOST_MODE=false
+
+# ===== Relay =====
+# Single relay (backward compatible)
+RELAY_ADDRESS=0.0.0.0:4001
+MAX_RELAY_BUFFER_GB=1
+DISK_BACKED_BUFFER=false
+
+# Multi-relay: comma-separated multiaddrs for failover/scaling
+# When one relay fails, the next is tried automatically.
+# Example: /ip4/69.169.109.243/tcp/4001/p2p/12D3...,/ip4/1.2.3.4/tcp/4001/p2p/12D3...
+RELAY_ADDRESSES=
+
+# ===== DHT (Decentralized Discovery) =====
+# Enable DHT for peer-to-peer discovery without central relay
+DHT_ENABLED=false
+# Mode: "server" (seeds/relays), "client" (downloaders), "auto" (auto-detect)
+DHT_MODE=auto
+# Custom bootstrap peers (comma-separated multiaddrs)
+# Default: Public IPFS bootstrap nodes
+DHT_BOOTSTRAP_PEERS=/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN,/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa,/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb,/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt,/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ
+# How often seeds re-announce to DHT (minutes)
+DHT_REANNOUNCE_INTERVAL_MIN=30
+
+# ===== Discovery Priority =====
+# Order to try discovery methods (comma-separated: dht, relay, direct)
+DISCOVERY_PRIORITY=dht,relay,direct
+
+# ===== TLS / Security =====
+# Leave empty for auto-generated self-signed certificates
+TLS_CERT_FILE=
+TLS_KEY_FILE=
+NO_CERT_VALIDATION=true
+
+# ===== Performance =====
+MAX_CONNECTIONS=1000
+MAX_STREAMS_PER_CONNECTION=100
+SEND_BUFFER_SIZE_MB=4
+RECV_BUFFER_SIZE_MB=4
+
+# ===== Environment =====
+# development | staging | production
+ENV=development
+
+# ===== Connection Health =====
+PING_INTERVAL_SEC=10
+RETRY_BACKOFF_SEC=5
+
+# ===== State Persistence =====
+STATE_DIR=./transfer_states
+STATE_EXPIRY_DAYS=7
+
+# ===== Logging =====
+LOG_LEVEL=info
+LOG_FILE=./magnetk.log
+
+# ===== Relay Features =====
+ENABLE_TRAFFIC_ROUTING=true
+ENABLE_ANALYTICS=true
+`
 }
 
 // set assigns a value to a config field by key name
@@ -249,6 +403,44 @@ func (c *Config) set(key, value string) error {
 		c.EnableTrafficRouting = strings.ToLower(value) == "true"
 	case "ENABLE_ANALYTICS":
 		c.EnableAnalytics = strings.ToLower(value) == "true"
+
+	// DHT settings
+	case "DHT_ENABLED":
+		c.DHTEnabled = strings.ToLower(value) == "true"
+	case "DHT_MODE":
+		c.DHTMode = strings.ToLower(value)
+	case "DHT_BOOTSTRAP_PEERS":
+		if value != "" {
+			peers := strings.Split(value, ",")
+			for i := range peers {
+				peers[i] = strings.TrimSpace(peers[i])
+			}
+			c.DHTBootstrapPeers = peers
+		}
+	case "DHT_REANNOUNCE_INTERVAL_MIN":
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid DHT_REANNOUNCE_INTERVAL_MIN: %w", err)
+		}
+		c.DHTReannounceIntervalMin = v
+
+	// Multi-relay
+	case "RELAY_ADDRESSES":
+		if value != "" {
+			addrs := strings.Split(value, ",")
+			for i := range addrs {
+				addrs[i] = strings.TrimSpace(addrs[i])
+			}
+			c.RelayAddresses = addrs
+		}
+	case "DISCOVERY_PRIORITY":
+		if value != "" {
+			priority := strings.Split(value, ",")
+			for i := range priority {
+				priority[i] = strings.TrimSpace(strings.ToLower(priority[i]))
+			}
+			c.DiscoveryPriority = priority
+		}
 	}
 	return nil
 }

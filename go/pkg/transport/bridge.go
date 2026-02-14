@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Package transport provides a Go wrapper over the C/MsQuic transport layer.
 //
 // It uses CGo to call into the native MsQuic-based transport for high-performance
@@ -130,7 +132,7 @@ func NewTransport(cfg Config) (*Transport, error) {
 		cCert := C.CString(cfg.CertFile)
 		defer C.free(unsafe.Pointer(cCert))
 		cConfig.cert_file = cCert
-		
+
 		cKey := C.CString(cfg.KeyFile)
 		defer C.free(unsafe.Pointer(cKey))
 		cConfig.key_file = cKey

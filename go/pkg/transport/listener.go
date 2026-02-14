@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Package transport provides the Go-side listener for accepting
 // inbound MsQuic connections and streams.
 package transport

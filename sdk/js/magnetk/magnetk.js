@@ -1,18 +1,20 @@
 /**
  * Magnetk Link Parser and Generator for Magnetk P2P
+ * Supports DHT discovery and multi-relay configuration.
  */
 export class MagnetkLink {
-    constructor(fileHash, fileName, fileSize, seedId, relayAddr) {
+    constructor(fileHash, fileName, fileSize, seedId, relayAddr, dhtEnabled = false) {
         this.fileHash = fileHash;
         this.fileName = fileName;
         this.fileSize = fileSize;
         this.seedId = seedId;
         this.relayAddr = relayAddr;
+        this.dhtEnabled = dhtEnabled;
     }
 
     /**
      * Parses a magnetk URI string.
-     * Format: magnetk:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&xs=<seed_id>&relay=<relay_addr>
+     * Format: magnetk:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&xs=<seed_id>&relay=<relay_addr>&dht=true
      * @param {string} uri 
      * @returns {MagnetkLink}
      */
@@ -21,7 +23,7 @@ export class MagnetkLink {
             throw new Error('Invalid magnet link: must start with magnetk:?');
         }
 
-        const params = new URLSearchParams(uri.slice(9)); // slicing 'magnetk:?' length is 9? No. 'magnet:?' is 8. 'magnetk:?' is 9. Correct.
+        const params = new URLSearchParams(uri.slice(9));
         const xt = params.get('xt');
         if (!xt || !xt.startsWith('urn:sha256:')) {
             throw new Error('Invalid magnet link: missing xt (urn:sha256:...)');
@@ -32,8 +34,15 @@ export class MagnetkLink {
         const fileSize = parseInt(params.get('xl') || '0', 10);
         const seedId = params.get('xs') || '';
         const relayAddr = params.get('relay') || '';
+        const dhtParam = (params.get('dht') || '').toLowerCase();
+        const dhtEnabled = dhtParam === 'true' || dhtParam === '1';
 
-        return new MagnetkLink(fileHash, fileName, fileSize, seedId, relayAddr);
+        // Must have at least one discovery method
+        if (!relayAddr && !dhtEnabled) {
+            throw new Error('Magnet link needs either relay address or dht=true for discovery');
+        }
+
+        return new MagnetkLink(fileHash, fileName, fileSize, seedId, relayAddr, dhtEnabled);
     }
 
     /**
@@ -46,8 +55,15 @@ export class MagnetkLink {
         if (this.fileName) parts.push(`dn=${encodeURIComponent(this.fileName)}`);
         if (this.fileSize > 0) parts.push(`xl=${this.fileSize}`);
         if (this.seedId) parts.push(`xs=${encodeURIComponent(this.seedId)}`);
-        if (this.relayAddr) parts.push(`relay=${this.relayAddr}`); // Multiaddr usually kept raw
+        if (this.relayAddr) parts.push(`relay=${this.relayAddr}`);
+        if (this.dhtEnabled) parts.push('dht=true');
 
         return `magnetk:?${parts.join('&')}`;
     }
+
+    /** @returns {boolean} */
+    hasRelay() { return !!this.relayAddr; }
+
+    /** @returns {boolean} */
+    hasDHT() { return this.dhtEnabled; }
 }

@@ -9,11 +9,12 @@ import (
 
 // MagnetLink represents a parsed magnet link
 type MagnetLink struct {
-	FileHash  string // SHA-256 hash (xt=urn:sha256:...)
-	FileName  string // Display name (dn=...)
-	SeedID    string // Seed peer ID (xs=...)
-	RelayAddr string // Required relay address (relay=...)
-	FileSize  int64  // File size in bytes (xl=...)
+	FileHash   string // SHA-256 hash (xt=urn:sha256:...)
+	FileName   string // Display name (dn=...)
+	SeedID     string // Seed peer ID (xs=...)
+	RelayAddr  string // Relay address (relay=...) - optional when DHT enabled
+	FileSize   int64  // File size in bytes (xl=...)
+	DHTEnabled bool   // DHT discovery enabled (dht=true)
 }
 
 // Parse parses a magnet link string into a MagnetLink struct
@@ -47,15 +48,21 @@ func Parse(magnetURI string) (*MagnetLink, error) {
 	// Parse xs (exact source - seed peer ID)
 	ml.SeedID = params.Get("xs")
 
-	// Parse relay (required relay address)
+	// Parse relay (relay address) - now optional
 	ml.RelayAddr = params.Get("relay")
-	if ml.RelayAddr == "" {
-		return nil, fmt.Errorf("magnet link missing relay address")
-	}
+
+	// Parse dht flag
+	dhtParam := strings.ToLower(params.Get("dht"))
+	ml.DHTEnabled = dhtParam == "true" || dhtParam == "1"
 
 	// Parse xl (file size) if present
 	if xl := params.Get("xl"); xl != "" {
 		fmt.Sscanf(xl, "%d", &ml.FileSize)
+	}
+
+	// Validate: need at least one discovery method
+	if ml.RelayAddr == "" && !ml.DHTEnabled {
+		return nil, fmt.Errorf("magnet link needs either relay address or dht=true for discovery")
 	}
 
 	return ml, nil
@@ -79,8 +86,15 @@ func (ml *MagnetLink) String() string {
 		params.Set("xl", fmt.Sprintf("%d", ml.FileSize))
 	}
 
-	// relay is required for Magnet network
-	params.Set("relay", ml.RelayAddr)
+	// Relay is optional now
+	if ml.RelayAddr != "" {
+		params.Set("relay", ml.RelayAddr)
+	}
+
+	// DHT flag
+	if ml.DHTEnabled {
+		params.Set("dht", "true")
+	}
 
 	return "magnetk:?" + params.Encode()
 }
@@ -96,13 +110,35 @@ func New(fileHash, fileName, seedID, relayAddr string, fileSize int64) *MagnetLi
 	}
 }
 
+// NewWithDHT creates a new MagnetLink with DHT enabled
+func NewWithDHT(fileHash, fileName, seedID, relayAddr string, fileSize int64, dhtEnabled bool) *MagnetLink {
+	return &MagnetLink{
+		FileHash:   fileHash,
+		FileName:   fileName,
+		SeedID:     seedID,
+		RelayAddr:  relayAddr,
+		FileSize:   fileSize,
+		DHTEnabled: dhtEnabled,
+	}
+}
+
 // Validate checks if the magnet link has all required fields
 func (ml *MagnetLink) Validate() error {
 	if ml.FileHash == "" {
 		return fmt.Errorf("file hash is required")
 	}
-	if ml.RelayAddr == "" {
-		return fmt.Errorf("relay address is required")
+	if ml.RelayAddr == "" && !ml.DHTEnabled {
+		return fmt.Errorf("at least one discovery method required (relay address or dht=true)")
 	}
 	return nil
+}
+
+// HasRelay returns true if the magnet link has a relay address
+func (ml *MagnetLink) HasRelay() bool {
+	return ml.RelayAddr != ""
+}
+
+// HasDHT returns true if the magnet link has DHT enabled
+func (ml *MagnetLink) HasDHT() bool {
+	return ml.DHTEnabled
 }
