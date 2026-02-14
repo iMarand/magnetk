@@ -1,6 +1,6 @@
 {
   "name": "magnetk",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "description": "JavaScript SDK for Magnetk P2P File Transfer System",
   "main": "index.js",
   "bin": {

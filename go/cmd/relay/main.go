@@ -86,6 +86,7 @@ func main() {
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
+		libp2p.NATPortMap(), // Use UPnP/PMP for automatic port forwarding
 	)
 	if err != nil {
 		log.Fatalf("[relay] Failed to create libp2p host: %v", err)

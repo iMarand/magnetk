@@ -130,6 +130,7 @@ func main() {
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
+		libp2p.NATPortMap(), // Use UPnP/PMP for automatic port forwarding
 	)
 	if err != nil {
 		log.Fatalf("[seed] Failed to create libp2p host: %v", err)
@@ -417,9 +418,9 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	}
 	defer s.Close()
 
-	// Determine advertised address
-	addresses := []string{}
+	// Determine advertised address and port
 	advertisedAddr := cfg.BindAddress
+	advertisedPort := cfg.TransportPort
 
 	if cfg.AdvertisedAddress != "" {
 		// Use configured advertised address (e.g., VPS public IP)
@@ -430,6 +431,9 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 		publicIP, publicPort, err := getPublicIdentity("stun.l.google.com:19302")
 		if err == nil {
 			advertisedAddr = publicIP
+			// We use the discovered public port for the mapping.
+			// Note: This assumes the NAT is port-preserving or we have a mapping alive.
+			advertisedPort = publicPort
 			log.Printf("[seed] Discovered public identity via STUN: %s:%d", publicIP, publicPort)
 		} else {
 			log.Printf("[seed] Warning: No advertised address configured and STUN failed, using bind address")
@@ -437,10 +441,10 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	}
 
 	// Add advertised addresses
-	addresses = append(addresses,
-		fmt.Sprintf("/ip4/%s/tcp/%d", advertisedAddr, cfg.TransportPort),
-		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", advertisedAddr, cfg.TransportPort),
-	)
+	addresses := []string{
+		fmt.Sprintf("/ip4/%s/tcp/%d", advertisedAddr, advertisedPort),
+		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", advertisedAddr, advertisedPort),
+	}
 
 	log.Printf("[seed] Publishing addresses: %v", addresses)
 
