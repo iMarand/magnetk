@@ -5,6 +5,9 @@ import tempfile
 import subprocess
 import shutil
 import time
+import struct
+import json
+import socket
 from typing import Optional, List, Dict, Union
 
 from .link import MagnetkLink
@@ -83,7 +86,50 @@ class MagnetkClient:
         self.auto_config = self.config.get('auto_config', True)
 
     # =========================================================================
+    # INTERNAL METHODS
+    # =========================================================================
+
+    def _get_relay_identity(self, host: str, port: int) -> Optional[str]:
+        """Connects to relay and fetches its Peer ID via the Magnetk protocol."""
+        try:
+            sock = socket.create_connection((host, port), timeout=5)
+            # MSG_GET_IDENTITY = 0x32 (50)
+            # Header: Length (4 bytes BE) + Type (1 byte)
+            # 0 length payload
+            header = struct.pack('>IB', 0, 0x32)
+            sock.sendall(header)
+            
+            # Read header
+            # Length (4) + Type (1)
+            resp_header = sock.recv(5)
+            if len(resp_header) < 5:
+                return None
+                
+            resp_len, resp_type = struct.unpack('>IB', resp_header)
+            
+            # MSG_IDENTITY_RES = 0x33 (51)
+            if resp_type != 0x33:
+                return None
+                
+            # Read payload
+            payload = b''
+            while len(payload) < resp_len:
+                chunk = sock.recv(resp_len - len(payload))
+                if not chunk: break
+                payload += chunk
+                
+            sock.close()
+            
+            data = json.loads(payload.decode('utf-8'))
+            return data.get('peer_id')
+            
+        except Exception as e:
+            print(f"[Magnetk-Py] Warning: Failed to fetch relay identity: {e}")
+            return None
+
+    # =========================================================================
     # MINIMAL-CODE API
+
     # =========================================================================
 
     def share(self, file_path: str) -> str:
@@ -161,15 +207,23 @@ class MagnetkClient:
             '-config', conf_path
         ]
         
-        # Add relay if DHT not exclusive or if relay provided
-        # (Assuming relay functionality is desired if configured)
-        # Note: If relay_url is hostname:port, Go binary expects Multiaddr format
-        # For simplicity, we assume user provides correct format or we construct basic one
-        # Real implementation would need robust multiaddr construction
-        relay_ma = f"/ip4/{self.relay_url.split(':')[0]}/tcp/{self.relay_url.split(':')[1]}" 
-        
+        # Build relay multiaddr
         if self.relay_url:
-            cmd.extend(['-relay', relay_ma]) # Basic assumption for now
+            parts = self.relay_url.split(':')
+            host = parts[0]
+            port = int(parts[1]) if len(parts) > 1 else 4003 # Default JS SDK port
+            
+            # Try to fetch Peer ID
+            peer_id = self._get_relay_identity(host, port)
+            
+            if peer_id:
+                # Construct valid LibP2P multiaddr: /ip4/HOST/tcp/PORT/p2p/ID
+                # Note: Go binary uses 4001 for discovery, JS uses 4003 fallback. 
+                # If we use 4001 here for the binary, that's correct for Go-to-Go LibP2P.
+                relay_ma = f"/ip4/{host}/tcp/4001/p2p/{peer_id}"
+                cmd.extend(['-relay', relay_ma])
+            else:
+                print("[Magnetk-Py] Warning: Could not resolve Relay Peer ID. Relay functionality limited (DHT only).")
             
         if self.dht_enabled:
             cmd.append('-dht')
@@ -179,10 +233,12 @@ class MagnetkClient:
 
         print(f"[Magnetk-Py] Spawning seeder: {' '.join(cmd)}")
         
+        # Merge stderr into stdout so we capture the Magnetk Link
+        # (the Go binary logs it to stderr)
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
             universal_newlines=True,
@@ -190,29 +246,18 @@ class MagnetkClient:
             errors="replace"
         )
         
-        # Parse output for magnet link
+        # Parse combined output for magnet link
         magnet_link = None
         for line in process.stdout:
-            # Sanitize for Windows console
             safe_line = line.strip().encode('ascii', 'replace').decode('ascii')
             print(f"[Seeder] {safe_line}")
             if "Magnetk Link:" in line:
                 magnet_link = line.split("Magnetk Link:")[1].strip()
                 break
-                
-        # Start a thread to keep reading stdout/stderr so buffer doesn't fill?
-        # For this simple synchronous API, we return the link but the process keeps running.
-        # Ideally, we'd return a handle to control the process.
-        # BUT `share()` implies strict "fire and forget" or "run until done".
-        # Since seeding is indefinite, this implementation halts after getting link 
-        # (which is bad) OR returns link and detaches.
-        # For this MVP, we'll return the link and let the process run in background?
-        # Actually Popen doesn't block. We just read until link is found.
         
         if not magnet_link:
-             # Check stderr for errors
-             _, stderr = process.communicate() # This waits for exit, which might not happen if stuck
-             raise RuntimeError(f"Failed to start seeding. Error: {stderr}")
+             rc = process.poll()
+             raise RuntimeError(f"Failed to start seeding. Seeder exited with code: {rc}")
 
         return magnet_link
 

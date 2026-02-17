@@ -3,17 +3,35 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "magnetk-sdk"
+name = "magnetk"
 version = "1.0.0"
-description = "Magnetk P2P SDK for Python"
+description = "Magnetk P2P File Transfer SDK — Share and download files over a decentralized network."
+readme = "README.md"
 authors = [{name = "iMarand"}]
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Topic :: Internet",
+    "Topic :: System :: Networking",
 ]
+keywords = ["p2p", "file-transfer", "magnetk", "decentralized", "dht", "quic"]
 requires-python = ">=3.8"
 
 [project.urls]
 "Homepage" = "https://github.com/iMarand/magnetk"
+"Repository" = "https://github.com/iMarand/magnetk"
+"Bug Tracker" = "https://github.com/iMarand/magnetk/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["magnetk*"]
+
+[tool.setuptools.package-data]
+magnetk = ["*.conf"]

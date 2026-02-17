@@ -1,0 +1,11 @@
+LICENSE
+MANIFEST.in
+README.md
+pyproject.toml
+magnetk/__init__.py
+magnetk/client.py
+magnetk/link.py
+magnetk.egg-info/PKG-INFO
+magnetk.egg-info/SOURCES.txt
+magnetk.egg-info/dependency_links.txt
+magnetk.egg-info/top_level.txt

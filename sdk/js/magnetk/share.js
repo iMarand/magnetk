@@ -1,6 +1,6 @@
-import { MagnetkClient } from 'magnetk';
+import { MagnetkClient } from './client.js';
 import path from 'path';
-import 'dotenv/config';
+// import 'dotenv/config';
 
 const filePath = "./app.txt";
 

@@ -9,7 +9,7 @@ def share():
         # 'dht_bootstrap_peers': [] # Optional
     })
 
-    file_path = "./test_file.txt"
+    file_path = "./examples/test_file.txt"
     try:
         print(f"Sharing {file_path}...")
         link = client.share(file_path)

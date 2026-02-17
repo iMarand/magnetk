@@ -2,6 +2,7 @@
 test.js
 inspect_stream.js
 cleanup.js
+app.txt
 package-lock.json
 node_modules/
 .git/

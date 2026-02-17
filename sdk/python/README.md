@@ -1,0 +1,75 @@
+# Magnetk Python SDK
+
+Magnetk is a high-performance peer-to-peer file transfer system. This SDK lets you **share** and **download** files over a decentralized network using Python.
+
+## Installation
+
+```bash
+pip install magnetk
+```
+
+## Prerequisites
+
+You need the Magnetk Go binaries (`seed` and `peer`) available in your system PATH or pointed to via environment variables / config.
+
+Build them from [the Magnetk repository](https://github.com/iMarand/magnetk):
+
+```bash
+./scripts/build_transport.sh   # Build C transport layer
+./scripts/build.sh             # Build Go binaries (seed, peer, relay)
+```
+
+## Quick Start
+
+### Share a File
+
+```python
+from magnetk import MagnetkClient
+
+client = MagnetkClient({
+    'relay_url': '69.169.109.243:4003',
+    'dht_enabled': True
+})
+
+link = client.share("./my-file.zip")
+print(f"Magnetk Link: {link}")
+```
+
+### Download a File
+
+```python
+from magnetk import MagnetkClient
+
+client = MagnetkClient({
+    'dht_enabled': True
+})
+
+client.get("magnetk:?xt=urn:sha256:...", "./downloads/")
+```
+
+## Configuration
+
+All configuration is done via constructor options or `settings.conf`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `relay_url` | str | `69.169.109.243:4003` | Primary relay address |
+| `relays` | list | `[]` | Fallback relays for redundancy |
+| `dht_enabled` | bool | `False` | Enable DHT discovery |
+| `dht_bootstrap_peers` | list | `[]` | Custom DHT bootstrap nodes |
+| `seed_port` | int | `4002` | Port for seeding (QUIC) |
+| `config_path` | str | auto | Path to `settings.conf` |
+| `seeder_path` | str | auto | Path to `seed` binary |
+| `peer_path` | str | auto | Path to `peer` binary |
+| `auto_config` | bool | `True` | Auto-create `settings.conf` |
+
+## Protocol Overview
+
+| Job | Protocol | Port | Description |
+|-----|----------|------|-------------|
+| Discovery | TCP (LibP2P) | 4001 | Peer routing & registry |
+| Data (Fast) | QUIC (UDP) | 4002 | High-speed parallel transfer |
+
+## License
+
+MIT — see [LICENSE](https://github.com/iMarand/magnetk/blob/main/LICENSE)
