@@ -108,6 +108,42 @@ int main() {
 }
 ```
 
+
+## 4. Advanced Configuration & DHT
+
+To enable decentralized discovery via DHT, you can configure your `settings.conf` file (default location: `./config/settings.conf`).
+
+### Enabling DHT
+```ini
+# Enable DHT discovery
+DHT_ENABLED=true
+
+# Discovery Mode: "server" (for seeds/relays), "client" (for downloaders), "auto"
+DHT_MODE=auto
+
+# Optional: Custom Bootstrap Nodes (comma-separated multiaddrs)
+# Leave empty to use default IPFS bootstrap nodes
+DHT_BOOTSTRAP_PEERS=
+```
+
+### Discovery Priority
+You can control the order in which the SDK attempts to find a file's location:
+```ini
+# Try DHT first, then Relay, then Direct connection
+DISCOVERY_PRIORITY=dht,relay,direct
+```
+
+### Redundancy & Failover
+To ensure high availability, you can configure multiple relays. If one goes down, the SDK automatically switches to the next one.
+```ini
+RELAY_ADDRESSES=/ip4/1.2.3.4/tcp/4001/p2p/Qm...,/ip4/5.6.7.8/tcp/4001/p2p/Qm...
+```
+
+### Performance Tuning
+- **Adaptive Chunking**: Enabled by default (`ADAPTIVE_CHUNKING=true`), it adjusts chunk sizes based on network conditions.
+- **Parallel Downloads**: `MAX_PARALLEL_CHUNKS` (default 10) controls concurrency.
+- **Buffers**: `SEND_BUFFER_SIZE_MB` and `RECV_BUFFER_SIZE_MB` (default 4MB) optimize throughput for high-latency links.
+
 ## Protocol Overview
 
 All SDKs speak the **Magnetk Binary Framing Protocol**:

@@ -31,6 +31,16 @@ graph TB
         P3[Peer 3]
     end
     
+    subgraph "DHT Network"
+        D1((DHT Node 1))
+        D2((DHT Node 2))
+        D3((DHT Node 3))
+        D1 -.- D2
+        D2 -.- D3
+        D3 -.- S1
+        D1 -.- P1
+    end
+    
     S1 --> R1
     S2 --> R1
     S3 --> R2
@@ -38,6 +48,10 @@ graph TB
     R1 --> P1
     R1 --> P2
     R2 --> P3
+    
+    %% DHT Connections (Discovery)
+    S1 -.-> D3
+    P1 -.-> D1
 ```
 
 ---
@@ -69,7 +83,8 @@ graph TB
 ├─────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │   libp2p     │  │  Discovery   │  │   Registry   │      │
-│  │    Host      │  │   (DHT)      │  │  (on Relay)  │      │
+│  │    Host      │  │   (DHT +     │  │  (on Relay)  │      │
+│  │              │  │    Relay)    │  │              │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 ├─────────────────────────────────────────────────────────────┤
 │                   TRANSPORT LAYER (C++)                      │
@@ -128,6 +143,29 @@ magnetk:?xt=urn:sha256:<HASH>&dn=<NAME>&xs=<SEED_ID>&relay=<RELAY>
 ```
 
 ---
+
+## Peer Discovery & DHT
+
+Magnetk uses a hybrid discovery system combining a **Kademlia DHT** (via libp2p) with **Centralized Relays**.
+
+### 1. Kademlia DHT
+- **Purpose**: Decentralized peer discovery without relying on a single relay.
+- **Implementation**: `go-libp2p-kad-dht`
+- **Keys**: SHA-256 hash of the file (multihash) -> CIDv1 (Raw codec).
+- **Values**: Provider records (Peer IDs + Multiaddrs).
+- **Bootstrap**: Nodes connect to public IPFS bootstrap nodes or custom Magnetk bootstrap nodes.
+
+### 2. Relay Discovery
+- **Purpose**: Fast, reliable discovery for managed infrastructure.
+- **Implementation**: Custom protocol over libp2p streams.
+- **Behavior**: Seeds push file manifests to relays; Peers query relays.
+
+### 3. Discovery Priority
+Configurable via `DISCOVERY_PRIORITY` in `settings.conf`:
+1.  **DHT**: Query the decentralized network first.
+2.  **Relay**: Fallback to the relay if DHT fails or returns no results.
+3.  **Direct**: Connect directly if the peer address is known (e.g., from a magnet link with `xs=` parameter).
+
 
 ## Relay Registry Schema
 
