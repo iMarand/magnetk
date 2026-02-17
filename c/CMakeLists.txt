@@ -20,9 +20,29 @@ elseif(APPLE)
     set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/macos/x64_Debug_openssl")
     set(MSQUIC_LIB "${MSQUIC_LIB_DIR}/libmsquic.dylib")
 else()
-    set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/linux/x64_Debug_openssl")
-    set(MSQUIC_LIB "${MSQUIC_LIB_DIR}/libmsquic.so")
+    # Linux: Check multiple possible locations
+    # 1. Artifacts (CI/Official Build)
+    set(PATH_ARTIFACTS "${MSQUIC_ROOT}/artifacts/bin/linux/x64_Debug_openssl/libmsquic.so")
+    # 2. Local Build (Release)
+    set(PATH_BUILD_REL "${MSQUIC_ROOT}/build/bin/Release/libmsquic.so")
+    # 3. Local Build (Debug)
+    set(PATH_BUILD_DBG "${MSQUIC_ROOT}/build/bin/Debug/libmsquic.so")
+
+    if(EXISTS "${PATH_ARTIFACTS}")
+        set(MSQUIC_LIB "${PATH_ARTIFACTS}")
+    elseif(EXISTS "${PATH_BUILD_REL}")
+        set(MSQUIC_LIB "${PATH_BUILD_REL}")
+    elseif(EXISTS "${PATH_BUILD_DBG}")
+        set(MSQUIC_LIB "${PATH_BUILD_DBG}")
+    else()
+        message(WARNING "Could not find libmsquic.so. Checked:\n - ${PATH_ARTIFACTS}\n - ${PATH_BUILD_REL}\n - ${PATH_BUILD_DBG}")
+        # Fallback to verify if it works anyway or error out later
+        set(MSQUIC_LIB "${PATH_BUILD_REL}") 
+    endif()
+    
+    get_filename_component(MSQUIC_LIB_DIR "${MSQUIC_LIB}" DIRECTORY)
 endif()
+
 
 # ===== Transport Library =====
 add_library(magnetk_transport STATIC
