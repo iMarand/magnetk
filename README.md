@@ -2,7 +2,7 @@
 
 A peer-to-peer file transfer network using **libp2p + QUIC** with automatic resume capability, relay-assisted delivery, and multiple SDKs.
 
-## 🚀 Features
+## Features
 
 - ✅ **Decentralized**: Direct P2P transfers with no central storage server.
 - ✅ **Resume Support**: Transfers automatically resume after network interruptions.
@@ -11,7 +11,7 @@ A peer-to-peer file transfer network using **libp2p + QUIC** with automatic resu
 - ✅ **Offline Buffering**: Intermediary relays buffer chunks for offline peers.
 - ✅ **Cross-Platform SDKs**: Easy integration for Go, JavaScript/Node.js, and C++.
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 - Go 1.20+
@@ -62,7 +62,7 @@ Use the magnet link to download the file.
 ./bin/peer --magnetk "magnetk:?xt=urn:sha256:..." --output ./download.zip
 ```
 
-## 📚 Documentation
+## Documentation
 For detailed guides on SDKs, architecture, and advanced configuration, see:
 - [**Full Documentation (DOCUMENTATION.md)**](./DOCUMENTATION.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
