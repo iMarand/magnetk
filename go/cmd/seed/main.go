@@ -46,6 +46,9 @@ func main() {
 	enableDHT := flag.Bool("dht", false, "Enable DHT for decentralized discovery")
 	discoveryMode := flag.String("discovery", "auto", "Discovery mode: dht, relay, hybrid, auto")
 	bootstrapPeers := flag.String("bootstrap", "", "Comma-separated DHT bootstrap peer multiaddrs")
+	holePunch := flag.Bool("holepunch", false, "Enable NAT hole punching")
+	relayAssisted := flag.String("relay-assisted", "", "Relay-assisted transfer mode: auto, true, false")
+	relayAddresses := flag.String("relay-addresses", "", "Comma-separated additional relay addresses")
 	flag.Parse()
 
 	if *filePath == "" {
@@ -89,6 +92,21 @@ func main() {
 
 	if *portStr != 0 {
 		cfg.TransportPort = *portStr
+	}
+
+	// Connection strategy overrides
+	if *holePunch {
+		cfg.HolePunch = true
+	}
+	if *relayAssisted != "" {
+		cfg.RelayAssisted = *relayAssisted
+	}
+	if *relayAddresses != "" {
+		addrs := strings.Split(*relayAddresses, ",")
+		for i := range addrs {
+			addrs[i] = strings.TrimSpace(addrs[i])
+		}
+		cfg.RelayAddresses = addrs
 	}
 
 	// Always ensure certificates exist (Linux MsQuic requires them)

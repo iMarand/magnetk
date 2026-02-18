@@ -62,19 +62,30 @@ DISCOVERY_PRIORITY=dht,relay,direct
 
 # ===== Chunking =====
 CHUNK_SIZE_MB=1
+ADAPTIVE_CHUNKING=true
 MAX_PARALLEL_CHUNKS=10
+
+# ===== Connection Strategy =====
+# RELAY_ASSISTED: auto | true | false
+#   auto  = try direct P2P first, fall back to relay if unreachable
+#   true  = always route data through relay (privacy mode)
+#   false = direct P2P only, fail if unreachable
+RELAY_ASSISTED=auto
+# HOLE_PUNCH: Enable NAT traversal via STUN + libp2p hole punching
+HOLE_PUNCH=true
+# RELAY_TIMEOUT_MS: How long to wait for direct connection before relay fallback
+RELAY_TIMEOUT_MS=5000
 `;
 
 export class MagnetkClient extends EventEmitter {
     constructor(config = {}) {
         super();
         this.config = {
-            // Relay settings (supports multiple relays for failover)
+            // Relay settings (supports multiple relays for failover/scaling)
             relayUrl: '69.169.109.243',
             relayPort: 4003,
             relays: [],           // Array of {host, port} for multi-relay failover
             seedPort: 4002,
-            enableSTUN: true,
             seederPath: null,
             configPath: null,
 
@@ -82,6 +93,13 @@ export class MagnetkClient extends EventEmitter {
             dhtEnabled: false,             // Enable DHT discovery
             dhtBootstrapPeers: [],         // Custom bootstrap peer multiaddrs
             discoveryPriority: ['dht', 'relay', 'direct'], // Discovery order
+
+            // Connection strategy
+            stunServers: ['stun:stun.l.google.com:19302'],  // STUN servers for NAT traversal
+            holePunch: true,               // Enable NAT hole punching (STUN first, relay fallback)
+            relayAssisted: 'auto',         // 'auto' | true | false — relay-assisted data transfer
+            enableRelayFallback: true,     // Fall back to relay if direct P2P fails
+            relayTimeout: 5000,            // ms to wait for direct connection before relay fallback
 
             // Auto-config: create settings.conf if missing
             autoConfig: true,
@@ -305,6 +323,23 @@ export class MagnetkClient extends EventEmitter {
         // Add bootstrap peers if configured
         if (this.config.dhtBootstrapPeers && this.config.dhtBootstrapPeers.length > 0) {
             args.push('-bootstrap', this.config.dhtBootstrapPeers.join(','));
+        }
+
+        // Connection strategy flags
+        if (this.config.holePunch) {
+            args.push('-holepunch');
+        }
+        if (this.config.relayAssisted !== undefined) {
+            const mode = this.config.relayAssisted === true ? 'true'
+                : this.config.relayAssisted === false ? 'false'
+                    : this.config.relayAssisted;
+            args.push('-relay-assisted', mode);
+        }
+
+        // Multi-relay: pass additional relay addresses
+        if (this.config.relays && this.config.relays.length > 0) {
+            const relayAddrs = this.config.relays.map(r => `${r.host}:${r.port}`).join(',');
+            args.push('-relay-addresses', relayAddrs);
         }
 
         console.log(`[Magnetk-JS] Spawning seeder: ${binPath} ${args.join(' ')}`);

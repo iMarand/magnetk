@@ -69,6 +69,11 @@ type Config struct {
 	// Multi-relay support
 	RelayAddresses    []string // Array of relay multiaddrs for failover/scaling
 	DiscoveryPriority []string // Discovery order: ["dht", "relay", "direct"]
+
+	// Connection strategy
+	RelayAssisted  string // "auto" | "true" | "false" — relay-assisted data transfer
+	HolePunch      bool   // Enable NAT hole punching (STUN + libp2p)
+	RelayTimeoutMs int    // How long to wait for direct before relay fallback
 }
 
 // DefaultConfig returns a Config with default values
@@ -109,6 +114,11 @@ func DefaultConfig() *Config {
 		// Multi-relay defaults
 		RelayAddresses:    nil,
 		DiscoveryPriority: []string{"dht", "relay", "direct"},
+
+		// Connection strategy defaults
+		RelayAssisted:  "auto",
+		HolePunch:      true,
+		RelayTimeoutMs: 5000,
 	}
 }
 
@@ -441,6 +451,18 @@ func (c *Config) set(key, value string) error {
 			}
 			c.DiscoveryPriority = priority
 		}
+
+	// Connection strategy
+	case "RELAY_ASSISTED":
+		c.RelayAssisted = strings.ToLower(value)
+	case "HOLE_PUNCH":
+		c.HolePunch = strings.ToLower(value) == "true"
+	case "RELAY_TIMEOUT_MS":
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid RELAY_TIMEOUT_MS: %w", err)
+		}
+		c.RelayTimeoutMs = v
 	}
 	return nil
 }

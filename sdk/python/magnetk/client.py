@@ -41,7 +41,19 @@ DISCOVERY_PRIORITY=dht,relay,direct
 
 # ===== Chunking =====
 CHUNK_SIZE_MB=1
+ADAPTIVE_CHUNKING=true
 MAX_PARALLEL_CHUNKS=10
+
+# ===== Connection Strategy =====
+# RELAY_ASSISTED: auto | true | false
+#   auto  = try direct P2P first, fall back to relay if unreachable
+#   true  = always route data through relay (privacy mode)
+#   false = direct P2P only, fail if unreachable
+RELAY_ASSISTED=auto
+# HOLE_PUNCH: Enable NAT traversal via STUN + libp2p hole punching
+HOLE_PUNCH=true
+# RELAY_TIMEOUT_MS: How long to wait for direct connection before relay fallback
+RELAY_TIMEOUT_MS=5000
 """
 
 class MagnetkClient:
@@ -57,11 +69,17 @@ class MagnetkClient:
         
         Args:
             config (dict): Configuration options
-                - relay_url (str): Primary relay address
-                - relays (list): List of fallback relays
-                - seed_port (int): Port for seeding
+                - relay_url (str): Primary relay address (host:port)
+                - relays (list): List of fallback relay dicts [{host, port}]
+                - seed_port (int): Port for seeding (default: 4002)
                 - dht_enabled (bool): Enable DHT discovery
                 - dht_bootstrap_peers (list): Custom DHT bootstrap nodes
+                - discovery_priority (list): Order of discovery methods
+                - stun_servers (list): STUN servers for NAT traversal
+                - hole_punch (bool): Enable NAT hole punching
+                - relay_assisted (str|bool): 'auto' | True | False
+                - enable_relay_fallback (bool): Fall back to relay if direct fails
+                - relay_timeout (int): ms to wait before relay fallback
                 - seeder_path (str): Path to seed binary
                 - peer_path (str): Path to peer binary
                 - config_path (str): Path to settings.conf
@@ -76,8 +94,15 @@ class MagnetkClient:
         
         # DHT settings
         self.dht_enabled = self.config.get('dht_enabled', False)
-
         self.dht_bootstrap_peers = self.config.get('dht_bootstrap_peers', [])
+        self.discovery_priority = self.config.get('discovery_priority', ['dht', 'relay', 'direct'])
+        
+        # Connection strategy
+        self.stun_servers = self.config.get('stun_servers', ['stun:stun.l.google.com:19302'])
+        self.hole_punch = self.config.get('hole_punch', True)
+        self.relay_assisted = self.config.get('relay_assisted', 'auto')  # 'auto' | True | False
+        self.enable_relay_fallback = self.config.get('enable_relay_fallback', True)
+        self.relay_timeout = self.config.get('relay_timeout', 5000)  # ms
         
         # Paths
         self.seeder_path = self.config.get('seeder_path')
@@ -230,6 +255,19 @@ class MagnetkClient:
             
         if self.dht_bootstrap_peers:
             cmd.extend(['-bootstrap', ','.join(self.dht_bootstrap_peers)])
+
+        # Connection strategy flags
+        if self.hole_punch:
+            cmd.append('-holepunch')
+        
+        if self.relay_assisted is not None:
+            mode = 'true' if self.relay_assisted is True else ('false' if self.relay_assisted is False else str(self.relay_assisted))
+            cmd.extend(['-relay-assisted', mode])
+        
+        # Multi-relay: pass additional relay addresses for scaling
+        if self.relays:
+            relay_addrs = ','.join(f"{r['host']}:{r['port']}" for r in self.relays)
+            cmd.extend(['-relay-addresses', relay_addrs])
 
         print(f"[Magnetk-Py] Spawning seeder: {' '.join(cmd)}")
         

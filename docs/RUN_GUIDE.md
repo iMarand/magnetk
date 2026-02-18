@@ -169,6 +169,87 @@ python download.py "magnetk:?dn=file.txt&relay=...&xt=urn:sha256:..."
 
 ---
 
+## Connection Strategy
+
+Magnetk uses a **STUN-first, relay-fallback** approach:
+
+1. **STUN** — Discover your public IP via STUN servers
+2. **Direct P2P** — Try connecting directly to the seed
+3. **Hole Punch** — If behind NAT, use libp2p hole punching to establish a direct connection
+4. **Relay Fallback** — If all else fails, route data through the relay
+
+### SDK Configuration
+
+```javascript
+// JS SDK
+const client = new MagnetkClient({
+    relayUrl: '69.169.109.243',
+    relayPort: 4003,
+    seedPort: 4002,
+    dhtEnabled: true,
+
+    // Connection strategy
+    stunServers: ['stun:stun.l.google.com:19302'],
+    holePunch: true,              // Enable NAT hole punching
+    relayAssisted: 'auto',        // 'auto' | true | false
+    enableRelayFallback: true,    // Fall back to relay if direct fails
+    relayTimeout: 5000,           // 5s before relay fallback
+
+    // Multi-relay for scaling
+    relays: [
+        { host: '69.169.109.243', port: 4003 },
+        { host: '1.2.3.4', port: 4003 }
+    ]
+});
+```
+
+```python
+# Python SDK
+client = MagnetkClient({
+    'relay_url': '69.169.109.243:4003',
+    'dht_enabled': True,
+
+    # Connection strategy
+    'stun_servers': ['stun:stun.l.google.com:19302'],
+    'hole_punch': True,
+    'relay_assisted': 'auto',       # 'auto' | True | False
+    'enable_relay_fallback': True,
+    'relay_timeout': 5000,
+
+    # Multi-relay for scaling
+    'relays': [
+        {'host': '69.169.109.243', 'port': 4003},
+        {'host': '1.2.3.4', 'port': 4003}
+    ]
+})
+```
+
+### `relay_assisted` Modes
+
+| Mode | Behavior |
+|------|----------|
+| `'auto'` | Try direct P2P first → fall back to relay if unreachable |
+| `true` | Always route data through relay (privacy mode) |
+| `false` | Direct P2P only — fail if seed is unreachable |
+
+### Connection Flow
+
+```
+Client                          Seed
+  │                               │
+  ├── STUN: discover public IP ──►│
+  │                               │
+  ├── Try direct P2P connection ─►│ ← Success? Done! 
+  │      (timeout: 5s)            │
+  │                               │
+  ├── Hole punch via relay ──────►│ ← NAT traversal
+  │                               │
+  ├── Relay-assisted fallback ───►│ ← Data via relay
+  │                               │
+```
+
+---
+
 ## Troubleshooting
 
 ### "Failed to start TCP listener: address already in use"
@@ -224,7 +305,8 @@ The peer connected to the **relay** port instead of the **seed** port. Check tha
 │                                                              │
 │  1. Asks relay "who has file X?"  →  relay:4003 (JS)         │
 │  2. Relay says "seed at 69.169.109.243:4002"                 │
-│  3. Client connects to seed:4002 for chunks                  │
+│  3. Try direct P2P → hole punch → relay fallback             │
+│  4. Download chunks from seed                                │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
