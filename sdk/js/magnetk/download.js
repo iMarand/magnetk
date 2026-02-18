@@ -19,7 +19,7 @@ async function download() {
         dhtEnabled: true, // Enable DHT discovery
         relayUrl: '69.169.109.243',
         relayPort: 4003,
-        seedPort: 4005
+        seedPort: 4002
     });
 
     // Extract filename from URI roughly to show intention

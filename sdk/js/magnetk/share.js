@@ -9,7 +9,7 @@ async function share() {
         relayUrl: '69.169.109.243', // Default to local for dev, change to public IPs for prod
         relayPort: 4003,
         seederPath: process.env.MAGNETK_SEEDER_PATH,
-        seedPort: 4005 // Default seed port
+        seedPort: 4002 // Data transfer port (must not conflict with relay 4003)
     });
 
     console.log(`[Share] Preparing to share: ${filePath}`);
