@@ -8,7 +8,7 @@ async function share() {
     const client = new MagnetkClient({
         relayUrl: '69.169.109.243', // Default to local for dev, change to public IPs for prod
         relayPort: 4003,
-        seederPath: process.env.MAGNETK_SEEDER_PATH,
+        // seederPath: process.env.MAGNETK_SEEDER_PATH || "~root/Desktop/Magnetk/magnetk/bin/seed",
         seedPort: 4002 // Data transfer port (must not conflict with relay 4003)
     });
 

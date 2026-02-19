@@ -3,6 +3,8 @@ test.js
 inspect_stream.js
 cleanup.js
 app.txt
+share.js
+download.js
 package-lock.json
 node_modules/
 .git/

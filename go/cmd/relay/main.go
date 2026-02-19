@@ -19,6 +19,7 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 
@@ -78,7 +79,7 @@ func main() {
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// ===== 1. Start libp2p host for discovery =====
+	// ===== 1. Start libp2p host for discovery + circuit relay v2 =====
 	listenAddr := fmt.Sprintf("/ip4/%s/tcp/%d", cfg.EffectiveBindAddress(), cfg.DiscoveryPort)
 	log.Printf("[relay] Discovery listen address: %s", listenAddr)
 
@@ -86,9 +87,25 @@ func main() {
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
+		libp2p.NATPortMap(),
+		libp2p.EnableRelayService(),
 	)
 	if err != nil {
 		log.Fatalf("[relay] Failed to create libp2p host: %v", err)
+	}
+
+	// Explicitly start circuit relay v2 with generous limits
+	_, err = relay.New(h,
+		relay.WithLimit(&relay.RelayLimit{
+			Duration: 10 * time.Minute,
+			Data:     1 << 30, // 1 GB per relay connection
+		}),
+		relay.WithResources(relay.DefaultResources()),
+	)
+	if err != nil {
+		log.Printf("[relay] Warning: Circuit relay v2 failed to start: %v", err)
+	} else {
+		log.Println("[relay] ✓ Circuit relay v2 enabled (NAT traversal for seeds behind NAT)")
 	}
 
 	log.Printf("[relay] LibP2P Peer ID: %s", h.ID().String())

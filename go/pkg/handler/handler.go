@@ -140,6 +140,19 @@ func (rh *RelayHandler) HandleTCPDiscovery(conn net.Conn) {
 				Multiaddrs: addrStrings,
 			})
 
+		case protocol.MsgProxyConnect:
+			// Proxy: bridge this TCP connection to a seed via libp2p
+			var payload protocol.ProxyConnectPayload
+			if err := json.Unmarshal(frame.Payload, &payload); err != nil {
+				writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+					Code:    protocol.ErrCodeInvalidRequest,
+					Message: "Invalid proxy payload",
+				})
+				continue
+			}
+			rh.handleProxyConnect(payload, conn, writer)
+			return // Connection is now a raw bridge, exit the frame loop
+
 		default:
 			writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
 				Code:    protocol.ErrCodeInvalidRequest,
@@ -147,6 +160,64 @@ func (rh *RelayHandler) HandleTCPDiscovery(conn net.Conn) {
 			})
 		}
 	}
+}
+
+// handleProxyConnect bridges a TCP client connection to a seed via libp2p stream
+func (rh *RelayHandler) handleProxyConnect(payload protocol.ProxyConnectPayload, conn net.Conn, writer *protocol.FrameWriter) {
+	seedPeerID, err := peer.Decode(payload.PeerID)
+	if err != nil {
+		writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+			Code:    protocol.ErrCodeInvalidRequest,
+			Message: fmt.Sprintf("Invalid peer ID: %v", err),
+		})
+		return
+	}
+
+	// Check if seed is connected via libp2p
+	if rh.host.Network().Connectedness(seedPeerID) != network.Connected {
+		writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+			Code:    protocol.ErrCodeFileNotFound,
+			Message: "Seed not connected to relay",
+		})
+		return
+	}
+
+	// Open libp2p stream to the seed's data handler
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	stream, err := rh.host.NewStream(ctx, seedPeerID, protocol.MagnetProtocolID)
+	if err != nil {
+		writer.WriteJSON(protocol.MsgError, protocol.ErrorPayload{
+			Code:    protocol.ErrCodeInternal,
+			Message: fmt.Sprintf("Failed to connect to seed: %v", err),
+		})
+		return
+	}
+
+	// Tell JS client the proxy is ready
+	writer.WriteJSON(protocol.MsgProxyReady, protocol.ProxyReadyPayload{
+		Success: true,
+		Message: "Connected to seed via relay",
+	})
+
+	fmt.Printf("[relay] Proxy bridge established: TCP client <-> seed %s\n", payload.PeerID[:12])
+
+	// Bridge: bidirectional copy between TCP conn and libp2p stream
+	done := make(chan struct{}, 2)
+	go func() {
+		io.Copy(stream, conn) // TCP -> libp2p
+		stream.CloseWrite()
+		done <- struct{}{}
+	}()
+	go func() {
+		io.Copy(conn, stream) // libp2p -> TCP
+		done <- struct{}{}
+	}()
+	<-done // Wait for one direction to finish
+
+	stream.Close()
+	fmt.Printf("[relay] Proxy bridge closed: seed %s\n", payload.PeerID[:12])
 }
 
 func (rh *RelayHandler) handleTCPMsgLookupPeer(payload protocol.LookupPeerPayload, writer *protocol.FrameWriter) {

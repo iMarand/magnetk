@@ -24,6 +24,8 @@ const MSG_TYPE = {
     MSG_CHUNK_RES: 0x21,
     MSG_GET_IDENTITY: 0x32,
     MSG_IDENTITY_RES: 0x33,
+    MSG_PROXY_CONNECT: 0x40,
+    MSG_PROXY_READY: 0x41,
     MSG_ERROR: 0xFF
 };
 
@@ -426,21 +428,68 @@ export class MagnetkClient extends EventEmitter {
         }
 
         const addressesToTry = [];
+
+        // Helper: filter out non-routable addresses
+        const isRoutable = (host) => {
+            if (!host) return false;
+            // 0.0.0.0 is a bind-all address, not valid for connecting
+            if (host === '0.0.0.0') return false;
+            // Link-local, loopback handled separately
+            if (host.startsWith('169.254.')) return false;
+            return true;
+        };
+
         if (lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
             const seed = lookupResult.seeds[0];
-            if (seed.transport_addr) addressesToTry.push(seed.transport_addr);
+            console.log(`[Magnetk-JS] Relay returned seed: peer_id=${seed.peer_id}, transport_addr=${seed.transport_addr}, addresses=${JSON.stringify(seed.addresses)}`);
+
+            // Add transport_addr if routable
+            if (seed.transport_addr) {
+                const [h] = seed.transport_addr.split(':');
+                if (isRoutable(h)) {
+                    addressesToTry.push(seed.transport_addr);
+                } else {
+                    console.log(`[Magnetk-JS] Skipping non-routable transport_addr: ${seed.transport_addr}`);
+                }
+            }
+
+            // Parse multiaddr addresses
             if (seed.addresses) {
                 seed.addresses.forEach(addr => {
                     const parts = addr.split('/');
                     if (parts.length >= 5 && parts[1] === 'ip4' && parts[3] === 'tcp') {
-                        addressesToTry.push(`${parts[2]}:${parts[4]}`);
+                        const ip = parts[2];
+                        if (isRoutable(ip)) {
+                            addressesToTry.push(`${ip}:${parts[4]}`);
+                        } else {
+                            console.log(`[Magnetk-JS] Skipping non-routable address: ${addr}`);
+                        }
                     }
                 });
             }
+        } else {
+            console.log(`[Magnetk-JS] Relay lookup: no seeds found for this file hash`);
         }
+
+        // Fallback: extract seed IP from magnet link relay addr
+        // If the magnet link contains the relay multiaddr, the seed's IP might be known
+        // from the relay's host (when seed is on same VPS as relay)
+        if (addressesToTry.length === 0 && ml.relayAddr) {
+            // Try to parse /ip4/HOST/tcp/PORT from relay multiaddr
+            const parts = ml.relayAddr.split('/');
+            if (parts.length >= 3 && parts[1] === 'ip4') {
+                const seedAddr = `${parts[2]}:${this.config.seedPort}`;
+                console.log(`[Magnetk-JS] No routable seeds from relay, trying relay host as seed: ${seedAddr}`);
+                addressesToTry.push(seedAddr);
+            }
+        }
+
+        // Local fallback (same machine)
         addressesToTry.push(`127.0.0.1:${this.config.seedPort}`);
 
         const uniqueAddrs = [...new Set(addressesToTry)];
+        console.log(`[Magnetk-JS] Connection attempts: ${uniqueAddrs.join(', ')}`);
+
         let socket;
         let connectionType = CONNECTION_TYPE.UNKNOWN;
         let finalAddr = null;
@@ -450,7 +499,11 @@ export class MagnetkClient extends EventEmitter {
             const port = parseInt(portStr, 10) || 4002;
 
             try {
-                socket = await this.connect(host, port);
+                // Use configurable timeout for connection attempts
+                socket = await Promise.race([
+                    this.connect(host, port),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), this.config.relayTimeout || 5000))
+                ]);
                 finalAddr = addr;
                 if (host === '127.0.0.1' || host === 'localhost') connectionType = CONNECTION_TYPE.LOCAL;
                 else if (host === relayHost) connectionType = CONNECTION_TYPE.RELAYED;
@@ -461,7 +514,54 @@ export class MagnetkClient extends EventEmitter {
             } catch (e) { }
         }
 
-        if (!socket) throw new Error('All seed connection attempts failed.');
+        if (!socket) {
+            // ===== RELAY PROXY FALLBACK =====
+            // All direct connections failed — try connecting through the relay
+            if (this.config.enableRelayFallback !== false && lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
+                const seed = lookupResult.seeds[0];
+                console.log(`[Magnetk-JS] Direct connection failed, trying relay proxy for seed ${seed.peer_id.substring(0, 12)}...`);
+
+                try {
+                    socket = await this.connect(relayHost, discoveryPort);
+                    const proxyWriter = new FrameWriter(socket);
+                    const proxyReader = new FrameReader(socket);
+
+                    // Request relay to proxy connection to seed
+                    await proxyWriter.writeJSON(MSG_TYPE.MSG_PROXY_CONNECT, {
+                        peer_id: seed.peer_id,
+                        file_hash: ml.fileHash
+                    });
+
+                    // Wait for proxy ready or error
+                    const proxyFrame = await proxyReader.readFrame();
+                    if (proxyFrame.type === MSG_TYPE.MSG_PROXY_READY) {
+                        const proxyResult = JSON.parse(proxyFrame.payload.toString());
+                        if (proxyResult.success) {
+                            console.log(`[Magnetk-JS] Relay proxy connected to seed`);
+                            connectionType = CONNECTION_TYPE.RELAYED;
+                            finalAddr = `relay-proxy:${relayHost}:${discoveryPort}`;
+                            this.emit('connection-type', { type: connectionType });
+                        } else {
+                            socket.destroy();
+                            socket = null;
+                        }
+                    } else if (proxyFrame.type === MSG_TYPE.MSG_ERROR) {
+                        const errResult = JSON.parse(proxyFrame.payload.toString());
+                        console.log(`[Magnetk-JS] Relay proxy error: ${errResult.message}`);
+                        socket.destroy();
+                        socket = null;
+                    } else {
+                        socket.destroy();
+                        socket = null;
+                    }
+                } catch (e) {
+                    console.log(`[Magnetk-JS] Relay proxy failed: ${e.message}`);
+                    if (socket) { socket.destroy(); socket = null; }
+                }
+            }
+        }
+
+        if (!socket) throw new Error('All seed connection attempts failed (direct + relay proxy).');
 
         this.lastDownloadStats.connectionType = connectionType;
         this.lastDownloadStats.remoteAddr = finalAddr;

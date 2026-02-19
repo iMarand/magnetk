@@ -45,6 +45,10 @@ const (
 	MsgGetIdentity uint8 = 0x32
 	MsgIdentityRes uint8 = 0x33
 
+	// Proxy (relay bridges TCP client to libp2p seed)
+	MsgProxyConnect uint8 = 0x40
+	MsgProxyReady   uint8 = 0x41
+
 	// Error
 	MsgError uint8 = 0xFF
 )
@@ -264,4 +268,16 @@ type HeartbeatPayload struct {
 type IdentityResponsePayload struct {
 	PeerID     string   `json:"peer_id"`
 	Multiaddrs []string `json:"multiaddrs"`
+}
+
+// ProxyConnectPayload requests the relay to proxy a connection to a seed.
+type ProxyConnectPayload struct {
+	PeerID   string `json:"peer_id"`
+	FileHash string `json:"file_hash"`
+}
+
+// ProxyReadyPayload confirms the relay has connected to the seed.
+type ProxyReadyPayload struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }

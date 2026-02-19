@@ -25,6 +25,7 @@ import (
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
@@ -144,11 +145,24 @@ func main() {
 
 	// ===== 2. Start libp2p host for discovery =====
 	listenAddr := fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress())
-	h, err := libp2p.New(
+
+	// Build libp2p options
+	p2pOpts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.Transport(tcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
-	)
+	}
+
+	// Enable hole punching for NAT traversal
+	if cfg.HolePunch {
+		p2pOpts = append(p2pOpts,
+			libp2p.NATPortMap(),
+			libp2p.EnableHolePunching(),
+		)
+		log.Println("[seed] Hole punching + NAT port mapping enabled")
+	}
+
+	h, err := libp2p.New(p2pOpts...)
 	if err != nil {
 		log.Fatalf("[seed] Failed to create libp2p host: %v", err)
 	}
@@ -261,6 +275,16 @@ func main() {
 			log.Fatalf("[seed] Failed to publish file: %v", err)
 		}
 		relayID = relayInfo.ID
+
+		// Register libp2p data stream handler so relay can proxy connections
+		h.SetStreamHandler(protocol.MagnetProtocolID, func(s network.Stream) {
+			defer s.Close()
+			log.Printf("[seed] Incoming libp2p data stream from %s", s.Conn().RemotePeer().String()[:12])
+			reader := protocol.NewFrameReader(s)
+			writer := protocol.NewFrameWriter(s)
+			serveChunkRequest(reader, writer, manifest, *filePath, chunkMgr, "libp2p-proxy")
+		})
+		log.Println("[seed] Registered libp2p data handler for proxy connections")
 	} else {
 		log.Println("[seed] No relay specified - using DHT-only discovery")
 	}
