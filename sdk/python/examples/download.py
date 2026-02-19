@@ -10,7 +10,9 @@ def download():
     
     # Initialize with DHT enabled for wider discovery
     client = MagnetkClient({
-        'dht_enabled': True
+        'dht_enabled': True,
+        'peer_path': r'd:\More_Projects\Projects\Magnetk\bin\peer.exe',
+        'seeder_path': r'd:\More_Projects\Projects\Magnetk\bin\seed.exe',
     })
 
     print(f"Downloading {magnet_link}...")

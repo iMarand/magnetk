@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -215,7 +216,7 @@ func main() {
 	}
 }
 
-// downloadFile downloads a file from a seed via MsQuic
+// downloadFile downloads a file from a seed via MsQuic (preferred) or TCP fallback
 func downloadFile(
 	seed protocol.SeedInfo,
 	ml *magnetkLink.MagnetLink,
@@ -224,13 +225,19 @@ func downloadFile(
 	stateMgr *state.Manager,
 	existingState *types.TransferState,
 ) error {
-	log.Printf("[peer] Connecting to seed %s via MsQuic at %s",
-		seed.PeerID[:12], seed.TransportAddr)
+	host, port := parseHostPort(seed.TransportAddr)
+	var reader *protocol.FrameReader
+	var writer *protocol.FrameWriter
+	var cleanup func()
 
-	// Create MsQuic transport (client mode)
+	// Try MsQuic first, fall back to TCP
+	msquicOK := false
+	log.Printf("[peer] Connecting to seed %s at %s", seed.PeerID[:12], seed.TransportAddr)
+
+	// --- Attempt 1: MsQuic ---
 	transportCfg := transport.Config{
 		BindAddress:       cfg.EffectiveBindAddress(),
-		Port:              0, // Any available port for client
+		Port:              0,
 		NoCertValidation:  cfg.NoCertValidation,
 		ALPN:              "magnetk",
 		MaxConnections:    10,
@@ -242,29 +249,45 @@ func downloadFile(
 	}
 
 	quicTransport, err := transport.NewTransport(transportCfg)
-	if err != nil {
-		return fmt.Errorf("init transport: %w", err)
+	if err == nil {
+		conn, err := quicTransport.Connect(host, port)
+		if err == nil {
+			stream, err := conn.OpenStream()
+			if err == nil {
+				log.Println("[peer] Connected via MsQuic")
+				reader = protocol.NewFrameReader(stream)
+				writer = protocol.NewFrameWriter(stream)
+				cleanup = func() {
+					stream.Close()
+					conn.Close()
+					quicTransport.Close()
+				}
+				msquicOK = true
+			} else {
+				conn.Close()
+				quicTransport.Close()
+			}
+		} else {
+			quicTransport.Close()
+		}
 	}
-	defer quicTransport.Close()
-
-	// Connect to seed
-	// Parse host:port from transport addr
-	host, port := parseHostPort(seed.TransportAddr)
-	conn, err := quicTransport.Connect(host, port)
-	if err != nil {
-		return fmt.Errorf("connect to seed: %w", err)
+	if !msquicOK {
+		log.Printf("[peer] MsQuic unavailable, trying TCP fallback to %s:%d", host, port)
 	}
-	defer conn.Close()
 
-	// Open stream
-	stream, err := conn.OpenStream()
-	if err != nil {
-		return fmt.Errorf("open stream: %w", err)
+	// --- Attempt 2: TCP fallback ---
+	if !msquicOK {
+		tcpConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 10*time.Second)
+		if err != nil {
+			return fmt.Errorf("connect to seed (TCP fallback): %w", err)
+		}
+		log.Println("[peer] Connected via TCP fallback")
+		reader = protocol.NewFrameReader(tcpConn)
+		writer = protocol.NewFrameWriter(tcpConn)
+		cleanup = func() { tcpConn.Close() }
 	}
-	defer stream.Close()
 
-	reader := protocol.NewFrameReader(stream)
-	writer := protocol.NewFrameWriter(stream)
+	defer cleanup()
 
 	// ===== Request manifest =====
 	log.Println("[peer] Requesting manifest...")
