@@ -41,19 +41,61 @@ Blockchain = The Law & Bank  (proves ownership, handles payment)
 
 ---
 
-## What This Enables
+## New Features: Blockchain + Magnetk Combined
 
-### 1. Decentralized File Marketplace
-Sellers list magnet links + price on blockchain. Buyers pay smart contract → get magnet link → download via Magnetk. No middleman, automatic payment.
+### 1. Streaming Before Full Download
+Nobody does this with P2P + blockchain. User pays → smart contract unlocks → Magnetk streams chunks in order via QUIC → user watches/uses file while still downloading. Like Netflix but fully decentralized.
 
-### 2. Pay-Per-Download
-Smart contract holds payment in escrow. Released to seeder only when download completes. No trust required between parties.
+### 2. Time-Limited Access
+Smart contract gives magnet link access that expires after X hours/days. Pay for 24hr access, link stops working after. A rental system on blockchain — Filecoin and BTT have no concept of this.
 
-### 3. Proof of File Existence
-File hash stored on blockchain forever. Proves file existed at a certain time. Cannot be tampered with or deleted.
+### 3. Private Encrypted Sharing
+File encrypted before seeding. Smart contract holds decryption key. Only released to wallet that paid. Magnetk transfers encrypted file, blockchain releases key separately. Nobody else can read it even if they intercept the transfer.
 
-### 4. Unstoppable File Sharing
-Magnet links on blockchain = permanent, uncensorable. File transferred via Magnetk = no central server to shut down.
+### 4. Split Revenue Between Multiple Seeders
+Smart contract automatically splits payment between everyone who helped seed the file — proportional to how many chunks they served. Neither Filecoin nor BTT split fairly per chunk contribution.
+
+### 5. File Versioning on Blockchain
+Publisher updates a file → new magnet link → blockchain records version history. Downloaders always know which version is latest and who published each version. Like Git but decentralized.
+
+### 6. Reputation System
+Seeders build on-chain reputation score based on successful deliveries. Bad seeders get flagged automatically by smart contract. Neither Filecoin nor BTT have a proper on-chain reputation system built in.
+
+---
+
+## New Features: Magnetk Standalone (No Blockchain Needed)
+
+### Transfer Improvements
+
+**Adaptive Chunk Sizing** — Currently chunks are fixed size. Make them adapt based on network speed — bigger chunks on fast connections, smaller on slow/unstable. Faster overall transfers.
+
+**Multi-Source Downloading** — Download same file from multiple seeders simultaneously, each serving different chunks. Like how BitTorrent works but over QUIC — significantly faster for popular files.
+
+**Partial File Requests** — Request only specific byte ranges of a file. Useful for previewing large files or resuming at exact position. Currently resume works but partial selection doesn't exist.
+
+**Compression On The Fly** — Compress chunks before sending, decompress on arrival. Saves bandwidth especially for text-based files. Happens transparently without user doing anything.
+
+### Connectivity Improvements
+
+**DHT (Distributed Hash Table)** — Remove reliance on a single relay for peer discovery. Peers find each other through a distributed network — no relay needed, truly decentralized. Current relay is a semi-centralized point of failure.
+
+**NAT Hole Punching** — Automatically punch through NAT without needing port forwarding. Right now seeders need port forwarding — this would eliminate that requirement completely.
+
+**WebRTC Support** — Allow browsers to directly participate as peers without Node.js. Someone opens a webpage and can seed or download — no installation needed.
+
+### SDK Improvements
+
+**Mobile SDKs (Android/iOS)** — Currently Go, JS, Python, C++ — no mobile. A React Native or Flutter SDK would open Magnetk to mobile apps entirely.
+
+**Browser SDK** — Pure browser JavaScript SDK using WebRTC. No Node.js required, works straight in a webpage.
+
+### User Features
+
+**Magnet Link Collections** — One magnet link that points to a folder/collection of files rather than a single file. Download entire folders in one go.
+
+**Transfer Speed Limits** — Let seeders cap how much bandwidth Magnetk uses so it doesn't consume their entire connection while seeding.
+
+**Seeder Discovery Without Relay** — If relay goes down, peers that already know each other can still discover new peers through each other — mesh-style discovery.
 
 ---
 
@@ -108,6 +150,19 @@ Magnet links on blockchain = permanent, uncensorable. File transferred via Magne
 | Filecoin | IPFS | Filecoin chain | Magnetk faster via QUIC |
 | BitTorrent Token | BitTorrent | TRON | Similar concept |
 | Storj | P2P storage | Ethereum | Similar concept |
+
+---
+
+## Priority Roadmap
+
+| Priority | Feature | Impact |
+|---|---|---|
+| 🔴 High | DHT + NAT hole punching | Eliminates relay dependency |
+| 🔴 High | Multi-source downloading | Massive speed improvement |
+| 🟡 Medium | Streaming + blockchain payment | Unique, nobody has this |
+| 🟡 Medium | Encrypted sharing + key on blockchain | Strong privacy feature |
+| 🟢 Later | Mobile SDKs | Expands reach to mobile |
+| 🟢 Later | Time-limited access | Monetization feature |
 
 ---
 
