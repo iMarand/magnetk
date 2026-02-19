@@ -99,6 +99,187 @@ Seeders build on-chain reputation score based on successful deliveries. Bad seed
 
 ---
 
+## Large Scale Distribution — How Launch Day Actually Works
+
+### The Problem With Few Seeders at Launch:
+
+When a publisher like Rockstar launches GTA 6, the naive assumption is they need massive servers or thousands of seeders ready. Without this the network collapses.
+
+```
+Rockstar + 100 seeders vs 10 million people downloading 150GB each
+= 1.5 Exabytes of data needed on day one
+= Impossible for any fixed number of servers to handle
+```
+
+This is why even Steam and PlayStation Store struggle on big launch days — traditional servers get more overwhelmed as more users arrive.
+
+---
+
+### How Magnetk Solves This — Viral Distribution:
+
+The key is that **every downloader automatically becomes a seeder** the moment they start receiving chunks. They do not wait until fully downloaded — they share chunks as they receive them in real time.
+
+```
+Hour 1 — Rockstar seeds to first 1,000 people
+         ↓
+Hour 2 — Those 1,000 each seed to 10 more = 10,000 downloading
+         ↓
+Hour 3 — 10,000 each seed to 10 more = 100,000 downloading
+         ↓
+Hour 6 — Millions seeding to millions simultaneously
+         ↓
+Rockstar servers barely needed anymore
+Network speed INCREASES as more people join
+```
+
+This is the complete opposite of traditional servers — more demand creates more supply automatically.
+
+---
+
+### Smart Chunk Distribution From the Start:
+
+Rockstar does not send the same chunks to everyone in the first wave. They deliberately send different chunks to different people so the full file is spread across the network immediately.
+
+```
+Person A receives chunks 1–50
+Person B receives chunks 51–100
+         ↓
+Immediately Person A and B can serve each other the full file
+Without either having the complete file yet
+         ↓
+Network coverage grows exponentially from minute one
+```
+
+---
+
+### Seeder CPU and Bandwidth Reality:
+
+Seeding is extremely light on CPU — it is mostly a network task of reading chunks from disk and sending them. A normal home computer handles this easily.
+
+```
+Normal home upload speed = 10–50 Mbps
+Serving one downloader = 2–5 Mbps
+One home seeder comfortably serves 5–20 people simultaneously
+         ↓
+10,000 early seeders × 10 people each
+= 100,000 simultaneous full-speed downloads from launch minute one
+```
+
+---
+
+### Incentivizing Early Seeders:
+
+Smart contract rewards early seeders with a higher delivery fee percentage because they carry the heaviest load when seeders are few. As more seeders join the bonus decreases naturally.
+
+```
+First hour seeders → earn 3x normal delivery fee
+First day seeders  → earn 2x normal delivery fee
+After launch week  → earn standard delivery fee
+```
+
+This financially motivates people to seed early and stay seeding, solving the cold start problem automatically.
+
+---
+
+### Rockstar's Role in This Model:
+
+Rockstar only needs to seed to the first wave well — maybe 10,000 to 50,000 initial downloaders. After that the network takes over completely. Their infrastructure cost drops dramatically within hours while everyone else gets faster speeds.
+
+| Time | Rockstar Load | Network Speed |
+|---|---|---|
+| Launch minute | High — serving first wave | Moderate |
+| Hour 3 | Medium — supplementing | Good |
+| Hour 6 | Low — mostly idle | Fast |
+| Day 2 | Near zero | Fastest — millions seeding |
+
+---
+
+## Large Scale Distribution — How Magnetk Handles Millions of Users
+
+### The Real Problem at Launch Day:
+
+When a massive game like GTA 6 launches, millions of people want it simultaneously. Traditional servers collapse under this pressure.
+
+```
+GTA 6 = 150GB per person
+10 million people downloading day one
+= 1.5 Exabytes of data to serve
+= No single company's servers can handle this
+```
+
+Even Steam struggles on major launch days. A publisher like Rockstar seeding alone with even a few hundred seeders cannot serve millions of people at acceptable speeds.
+
+### How Magnetk Solves This — Viral Distribution:
+
+The key is that every downloader automatically becomes a seeder the moment they start receiving chunks. They do not wait until fully downloaded — they share chunks as they receive them. This creates a self-amplifying network effect.
+
+```
+Hour 1 — Launch:
+Rockstar seeds first wave to 10,000 people
+         ↓
+Hour 2:
+Those 10,000 each seed to 10 more = 100,000 people downloading
+         ↓
+Hour 3:
+100,000 each seed to 10 more = 1,000,000 people downloading
+         ↓
+Hour 6:
+Millions seeding to millions simultaneously
+Rockstar servers barely needed anymore
+Network speed INCREASES as more people join
+```
+
+This is the complete opposite of traditional servers — more demand creates more supply automatically.
+
+### Smart Chunk Distribution at Launch:
+
+Rockstar does not send the same chunks to everyone in the first wave. Instead Magnetk deliberately distributes different chunks to different people so the full file is spread across the network immediately.
+
+```
+Person A receives chunks 1-50
+Person B receives chunks 51-100
+         ↓
+Immediately A and B can seed the complete file between them
+Without waiting for either to finish downloading
+         ↓
+Coverage spreads exponentially from minute one
+```
+
+### CPU and Bandwidth Reality for Seeders:
+
+Seeding is very light on CPU — it is mostly a network task of reading chunks from disk and sending them. A normal home computer handles this easily.
+
+```
+Normal home upload speed = 10-50 Mbps
+Serving one downloader = 2-5 Mbps used
+One home seeder comfortably serves 5-20 people simultaneously
+         ↓
+10,000 initial seeders × 10 people each
+= 100,000 simultaneous downloads at full speed from minute one
+```
+
+### Incentivized Early Seeding:
+
+Smart contract rewards early seeders with a higher delivery fee percentage because they carry the heaviest load when seeders are few. This encourages people to seed generously from launch and not disconnect.
+
+```
+Launch day seeder earns 1.5× normal delivery fee
+Week 2 seeder earns standard delivery fee
+         ↓
+Financial incentive to join early → network bootstraps itself fast
+```
+
+### What Rockstar Actually Needs to Run:
+
+Instead of massive CDN infrastructure serving everyone, Rockstar only needs to seed the first wave well — perhaps 10,000-50,000 initial connections. After a few hours the community carries the entire load. Their server costs drop dramatically while download speeds for everyone improve.
+
+```
+Traditional launch:      More users = slower speeds = costs explode
+Magnetk launch:          More users = faster speeds = costs drop
+```
+
+---
+
 ## Architecture
 
 ```
