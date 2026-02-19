@@ -140,6 +140,73 @@ Users can choose which mode fits them. All three can coexist on the same network
 
 ---
 
+## Enterprise Partnership Model (e.g. Rockstar / GTA 6)
+
+### Two Separate Payments — Never Mixed:
+
+When a publisher like Rockstar uses Magnetk, there are two completely separate payment layers that never interfere with each other.
+
+```
+Buyer pays $300 → goes to Rockstar (game license fee)
+Buyer pays $0.50 → goes to seeders (delivery/bandwidth fee)
+```
+
+Rockstar sets their own price. Magnetk handles the delivery fee separately. Seeders never touch Rockstar's money and never need to pay Rockstar anything — they are bandwidth providers, not resellers.
+
+### Full Enterprise Flow:
+```
+1. Buyer pays $300 to Rockstar smart contract
+2. Contract verifies payment → releases encrypted magnetk link to buyer's wallet only
+3. Buyer starts download → pulls chunks from multiple seeders via QUIC
+4. Each chunk delivery is cryptographically signed by the seeder
+5. Download completes → contract counts each seeder's chunk contributions
+6. Delivery fee split proportionally among all seeders automatically
+7. Magnetk protocol takes its percentage automatically
+8. Rockstar keeps their $300, seeders earn delivery fee, you earn protocol fee
+```
+
+### Do Seeders Pay Rockstar?
+No. Seeders are like delivery drivers — they move the data, they do not sell it. The buyer already paid Rockstar for the license. Think of it exactly like this:
+
+```
+Amazon delivery model:
+You pay Amazon for the product   →   Rockstar gets $300
+Amazon pays the delivery driver  →   Seeder gets bandwidth fee
+Driver never pays Amazon         →   Seeder never pays Rockstar
+```
+
+### Multi-Seeder Chunk Accounting:
+When a buyer downloads from multiple seeders simultaneously, each seeder gets paid proportionally to how many chunks they delivered.
+
+```
+File = 100 chunks total
+
+Seeder A delivered 60 chunks → earns 60% of delivery fee
+Seeder B delivered 30 chunks → earns 30% of delivery fee
+Seeder C delivered 10 chunks → earns 10% of delivery fee
+```
+
+Every chunk is cryptographically signed by the seeder who delivered it — proof on-chain. Smart contract counts all signed chunks per seeder at the end and splits automatically. Nobody can fake or inflate their chunk count.
+
+### Why Rockstar Benefits:
+
+| Without Magnetk | With Magnetk |
+|---|---|
+| Pays millions for CDN servers | Pays near zero, community seeds |
+| Servers crash on launch day | Faster as more people seed simultaneously |
+| Centralized — can be attacked | Distributed — no single point of failure |
+| Fixed download speed | Gets faster as game gets more popular |
+
+### Piracy Protection:
+The magnetk link is encrypted and tied to the buyer's wallet address. Even if buyer shares the link, nobody else can use it — smart contract checks that the wallet requesting download is the same wallet that paid. Content is protected at the protocol level.
+
+### Your Revenue From Enterprise Deals:
+- Licensing or integration fee from Rockstar (one time or annual)
+- Protocol percentage of every delivery fee across all downloads
+- Other studios see it working → approach you → more deals follow
+
+---
+
 ## Summary
 
 - Downloaders pay → seeders earn → relay operators earn → you earn
