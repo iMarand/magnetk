@@ -6,6 +6,7 @@ package transport
 
 /*
 #include "transport.h"
+#include <stdint.h>
 #include <stdlib.h>
 
 // CGo cannot call Go function pointers directly, so we use these C trampolines
@@ -15,6 +16,26 @@ extern void goOnConnection(void* listener, void* conn, void* userData);
 extern void goOnStream(void* conn, void* stream, void* userData);
 extern void goOnData(void* stream, uint8_t* data, uint32_t length, int fin, void* userData);
 extern void goOnClose(void* handle, int32_t status, void* userData);
+
+static inline magnetk_status_t magnetk_listen_with_id(
+    magnetk_transport_t* transport,
+    magnetk_on_connection_fn on_connection,
+    magnetk_on_stream_fn on_stream,
+    magnetk_on_data_fn on_data,
+    magnetk_on_close_fn on_close,
+    uintptr_t user_data,
+    magnetk_listener_t** out_listener
+) {
+    return magnetk_listen(
+        transport,
+        on_connection,
+        on_stream,
+        on_data,
+        on_close,
+        (void*)user_data,
+        out_listener
+    );
+}
 */
 import "C"
 import (
@@ -32,10 +53,11 @@ type DataHandler func(data []byte, fin bool)
 
 // Listener accepts incoming QUIC connections on the transport.
 type Listener struct {
-	handle    *C.magnetk_listener_t
-	transport *Transport
-	mu        sync.Mutex
-	closed    bool
+	handle     *C.magnetk_listener_t
+	transport  *Transport
+	mu         sync.Mutex
+	closed     bool
+	registryID uintptr
 
 	// Callbacks
 	onStream StreamHandler
@@ -61,13 +83,13 @@ func (t *Transport) Listen(onStream StreamHandler) (*Listener, error) {
 	listenerID := registerListener(l)
 
 	var cListener *C.magnetk_listener_t
-	status := C.magnetk_listen(
+	status := C.magnetk_listen_with_id(
 		t.handle,
 		C.magnetk_on_connection_fn(C.goOnConnection),
 		C.magnetk_on_stream_fn(C.goOnStream),
 		C.magnetk_on_data_fn(C.goOnData),
 		C.magnetk_on_close_fn(C.goOnClose),
-		unsafe.Pointer(listenerID),
+		C.uintptr_t(listenerID),
 		&cListener,
 	)
 	if err := statusToError(status); err != nil {
@@ -76,6 +98,7 @@ func (t *Transport) Listen(onStream StreamHandler) (*Listener, error) {
 	}
 
 	l.handle = cListener
+	l.registryID = listenerID
 	return l, nil
 }
 
@@ -88,6 +111,7 @@ func (l *Listener) Close() {
 	}
 	l.closed = true
 	C.magnetk_listener_close(l.handle)
+	unregisterListener(l.registryID)
 }
 
 // ===== CGo callback registry =====

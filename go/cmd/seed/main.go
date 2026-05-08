@@ -29,6 +29,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	circuitv2client "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 
@@ -147,12 +148,16 @@ func main() {
 		manifest.FileHash, manifest.TotalChunks, manifest.ChunkSize)
 
 	// ===== 2. Start libp2p host for discovery =====
-	listenAddr := fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress())
+	listenAddrs := []string{
+		fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress()),
+		fmt.Sprintf("/ip4/%s/udp/0/quic-v1", cfg.EffectiveBindAddress()),
+	}
 
 	// Build libp2p options
 	p2pOpts := []libp2p.Option{
-		libp2p.ListenAddrStrings(listenAddr),
+		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Security(noise.ID, noise.New),
 	}
 
@@ -162,7 +167,7 @@ func main() {
 			libp2p.NATPortMap(),
 			libp2p.EnableHolePunching(),
 		)
-		log.Println("[seed] Hole punching + NAT port mapping enabled")
+		log.Println("[seed] libp2p QUIC + DCUtR hole punching + NAT port mapping enabled")
 	}
 
 	h, err := libp2p.New(p2pOpts...)

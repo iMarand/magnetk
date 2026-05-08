@@ -149,6 +149,45 @@ func (fr *FrameReader) ReadFrame() (*Frame, error) {
 	return &Frame{Type: msgType, Payload: payload}, nil
 }
 
+// ReadFrameWithProgress reads a complete frame and calls onPayloadBytes as the
+// payload arrives. It is useful for large chunk frames over slower relayed
+// paths where a plain ReadFrame would look stuck until the whole chunk lands.
+func (fr *FrameReader) ReadFrameWithProgress(onPayloadBytes func(read, total uint32)) (*Frame, error) {
+	if _, err := io.ReadFull(fr.r, fr.buf[:]); err != nil {
+		return nil, err
+	}
+
+	length := binary.BigEndian.Uint32(fr.buf[:4])
+	msgType := fr.buf[4]
+
+	if length > MaxFrameSize {
+		return nil, fmt.Errorf("frame too large: %d bytes", length)
+	}
+
+	payload := make([]byte, length)
+	var read uint32
+	for read < length {
+		n, err := fr.r.Read(payload[read:])
+		if n > 0 {
+			read += uint32(n)
+			if onPayloadBytes != nil {
+				onPayloadBytes(read, length)
+			}
+		}
+		if err != nil {
+			if err == io.EOF && read == length {
+				break
+			}
+			return nil, fmt.Errorf("read frame payload: %w", err)
+		}
+		if n == 0 {
+			return nil, io.ErrUnexpectedEOF
+		}
+	}
+
+	return &Frame{Type: msgType, Payload: payload}, nil
+}
+
 // ReadJSON reads a frame and decodes the JSON payload.
 func (fr *FrameReader) ReadJSON(expectedType uint8, v interface{}) error {
 	f, err := fr.ReadFrame()

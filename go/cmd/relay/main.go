@@ -21,6 +21,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 
 	"magnetk/pkg/buffer"
@@ -80,12 +81,16 @@ func main() {
 	fmt.Println()
 
 	// ===== 1. Start libp2p host for discovery + circuit relay v2 =====
-	listenAddr := fmt.Sprintf("/ip4/%s/tcp/%d", cfg.EffectiveBindAddress(), cfg.DiscoveryPort)
-	log.Printf("[relay] Discovery listen address: %s", listenAddr)
+	listenAddrs := []string{
+		fmt.Sprintf("/ip4/%s/tcp/%d", cfg.EffectiveBindAddress(), cfg.DiscoveryPort),
+		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", cfg.EffectiveBindAddress(), cfg.DiscoveryPort),
+	}
+	log.Printf("[relay] Discovery listen addresses: %v", listenAddrs)
 
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(listenAddr),
+		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.NATPortMap(),
 		libp2p.EnableRelayService(),

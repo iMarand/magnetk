@@ -30,6 +30,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	libp2pProto "github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
 
@@ -162,13 +163,26 @@ func main() {
 			len(existingState.CompletedChunks), existingState.TotalChunks)
 	}
 
-	// ===== 3. Start libp2p for discovery =====
-	listenAddr := fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress())
-	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(listenAddr),
+	// ===== 3. Start libp2p for discovery + relay/hole-punch fallback =====
+	listenAddrs := []string{
+		fmt.Sprintf("/ip4/%s/tcp/0", cfg.EffectiveBindAddress()),
+		fmt.Sprintf("/ip4/%s/udp/0/quic-v1", cfg.EffectiveBindAddress()),
+	}
+	p2pOpts := []libp2p.Option{
+		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Transport(tcp.NewTCPTransport),
+		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Security(noise.ID, noise.New),
-	)
+	}
+	if cfg.HolePunch {
+		p2pOpts = append(p2pOpts,
+			libp2p.NATPortMap(),
+			libp2p.EnableHolePunching(),
+		)
+		log.Println("[peer] libp2p QUIC + DCUtR hole punching enabled")
+	}
+
+	h, err := libp2p.New(p2pOpts...)
 	if err != nil {
 		log.Fatalf("[peer] Failed to create libp2p host: %v", err)
 	}
@@ -240,7 +254,7 @@ func main() {
 		// NATs without UPnP). Connect by libp2p PeerID through the relay's
 		// circuit-relay-v2 service. Slower than direct (data flows via the
 		// relay) but works across any NAT topology.
-		if relay == "" || cfg.RelayAssisted == "false" {
+		if relay == "" {
 			return
 		}
 		log.Println("[peer] Trying libp2p circuit-relay tunnel...")
@@ -402,12 +416,48 @@ func downloadFileViaLibp2p(
 	if err != nil {
 		return fmt.Errorf("open libp2p stream to seed: %w", err)
 	}
+
+	if stream.Conn().Stat().Limited {
+		log.Printf("[peer] Connected via libp2p circuit relay to seed %s", seed.PeerID[:12])
+		if directStream, ok := tryHolePunchedLibp2pStream(h, seedID, seed.PeerID[:12]); ok {
+			stream.Close()
+			stream = directStream
+		} else if cfg.RelayAssisted == "false" {
+			stream.Close()
+			return fmt.Errorf("direct libp2p hole punch unavailable and relay-assisted=false")
+		}
+	} else {
+		log.Printf("[peer] Connected via direct libp2p stream to seed %s", seed.PeerID[:12])
+	}
 	defer stream.Close()
 
-	log.Printf("[peer] Connected via libp2p circuit relay to seed %s", seed.PeerID[:12])
 	reader := protocol.NewFrameReader(stream)
 	writer := protocol.NewFrameWriter(stream)
 	return runChunkProtocol(reader, writer, ml, outFile, cfg, stateMgr, existingState)
+}
+
+func tryHolePunchedLibp2pStream(h host.Host, seedID peer.ID, shortID string) (network.Stream, bool) {
+	log.Printf("[peer] Waiting briefly for libp2p DCUtR hole-punched direct path to %s...", shortID)
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, conn := range h.Network().ConnsToPeer(seedID) {
+			if !conn.Stat().Limited {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				stream, err := h.NewStream(ctx, seedID, libp2pProto.ID(protocol.MagnetProtocolID))
+				cancel()
+				if err == nil && !stream.Conn().Stat().Limited {
+					log.Printf("[peer] Upgraded to direct libp2p hole-punched path for seed %s", shortID)
+					return stream, true
+				}
+				if err == nil {
+					stream.Close()
+				}
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	log.Printf("[peer] No direct libp2p hole-punched path available; continuing through relay")
+	return nil, false
 }
 
 // runChunkProtocol drives manifest + chunk requests over an already-open
@@ -451,6 +501,12 @@ func runChunkProtocol(
 	if existingState != nil {
 		for _, idx := range existingState.CompletedChunks {
 			completedMap[idx] = true
+		}
+	}
+	var completedBytes int64
+	for _, meta := range manifest.Chunks {
+		if completedMap[meta.Index] {
+			completedBytes += meta.Size
 		}
 	}
 
@@ -499,6 +555,7 @@ func runChunkProtocol(
 	batchSize := cfg.MaxParallelChunks
 	startTime := time.Now()
 	downloaded := 0
+	downloadedBytes := completedBytes
 
 	for i := 0; i < len(neededChunks); i += batchSize {
 		end := i + batchSize
@@ -518,7 +575,25 @@ func runChunkProtocol(
 
 		// Receive chunks
 		for range batch {
-			frame, err := reader.ReadFrame()
+			nextChunkOrdinal := downloaded + len(completedMap) + 1
+			lastProgressPrint := time.Now().Add(-time.Second)
+			frame, err := reader.ReadFrameWithProgress(func(read, total uint32) {
+				if total < 64*1024 || time.Since(lastProgressPrint) < 250*time.Millisecond {
+					return
+				}
+				lastProgressPrint = time.Now()
+				elapsed := time.Since(startTime).Seconds()
+				receivedBytes := downloadedBytes + int64(read)
+				speed := float64(receivedBytes-completedBytes) / elapsed / 1024 / 1024
+				fmt.Printf("\r[peer] Receiving chunk %d/%d: %.2f/%.2f MB | total %.2f/%.2f MB | %.2f MB/s",
+					nextChunkOrdinal,
+					manifest.TotalChunks,
+					float64(read)/1024/1024,
+					float64(total)/1024/1024,
+					float64(receivedBytes)/1024/1024,
+					float64(manifest.FileSize)/1024/1024,
+					speed)
+			})
 			if err != nil {
 				if err == io.EOF {
 					return fmt.Errorf("connection closed before all chunks received")
@@ -549,15 +624,21 @@ func runChunkProtocol(
 			}
 
 			downloaded++
+			downloadedBytes += int64(len(chunkData))
 			transferState.CompletedChunks = append(transferState.CompletedChunks, chunkIdx)
 
 			// Progress
 			pct := float64(downloaded+len(completedMap)) / float64(manifest.TotalChunks) * 100
 			elapsed := time.Since(startTime).Seconds()
-			speed := float64(downloaded) * float64(manifest.ChunkSize) / elapsed / 1024 / 1024
+			speed := float64(downloadedBytes-completedBytes) / elapsed / 1024 / 1024
 
-			fmt.Printf("\r[peer] Progress: %.1f%% (%d/%d chunks) | %.2f MB/s",
-				pct, downloaded+len(completedMap), manifest.TotalChunks, speed)
+			fmt.Printf("\r[peer] Progress: %.1f%% (%d/%d chunks, %.2f/%.2f MB) | %.2f MB/s",
+				pct,
+				downloaded+len(completedMap),
+				manifest.TotalChunks,
+				float64(downloadedBytes)/1024/1024,
+				float64(manifest.FileSize)/1024/1024,
+				speed)
 
 			// Save state periodically
 			if downloaded%10 == 0 {
