@@ -1,6 +1,8 @@
 # Magnetk JavaScript SDK
 
-The professional JavaScript SDK for interacting with the Magnetk P2P network. This SDK allows you to parse/generate Magnetk links and download files via TCP using the Magnetk binary protocol.
+The JavaScript SDK for interacting with the Magnetk P2P network. It can parse/generate Magnetk links, spawn the native Go seeder for sharing, and download over the TCP protocol directly or through the relay TCP proxy.
+
+Pure JavaScript downloads do not use MsQuic or native libp2p DCUtR hole punching. For the full native transport stack, use the Go CLI/SDK. The JS SDK still works across networks through the relay proxy when direct TCP is not reachable.
 
 ## Installation
 
@@ -32,7 +34,7 @@ await client.keepSeeding();
 ```
 
 ### One-Line Downloading
-Download files with automatic connection optimization (Direct > Local > Relay).
+Download files with automatic connection optimization (Direct TCP > Local TCP > Relay TCP proxy).
 
 ```javascript
 const magnetURI = 'magnetk:?xt=urn:sha256:abc...&relay=...';
@@ -101,7 +103,7 @@ magnetk download "magnetk:?..." --output ./file.zip
 
 ## Prerequisites
 
-The JavaScript SDK is a lightweight wrapper around the high-performance **Magnetk Go Binaries**. You must have these binaries on your system to use seeding or relay features.
+The JavaScript SDK is a lightweight wrapper around the high-performance **Magnetk Go Binaries** for seeding. Downloading can run in pure JavaScript over direct TCP or the relay TCP proxy.
 
 1.  **Download** the latest binaries for your platform (Windows/Linux/macOS).
 2.  **Ensure** they are in your system `PATH` OR provide the path manually in the SDK config.

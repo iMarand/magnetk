@@ -1,15 +1,17 @@
 import { MagnetkClient } from './client.js';
-import path from 'path';
 // import 'dotenv/config';
 
-const filePath = "./app.txt";
+const filePath = process.argv[2] || './app.txt';
 
 async function share() {
     const client = new MagnetkClient({
-        relayUrl: '69.169.109.243', // Default to local for dev, change to public IPs for prod
+        relayUrl: '69.169.109.243',
         relayPort: 4003,
-        // seederPath: process.env.MAGNETK_SEEDER_PATH || "~root/Desktop/Magnetk/magnetk/bin/seed",
-        seedPort: 4002 // Data transfer port (must not conflict with relay 4003)
+        seedPort: 4002,
+        holePunch: true,
+        relayAssisted: 'auto',
+        transportMode: 'auto',
+        // seederPath: process.env.MAGNETK_SEEDER_PATH,
     });
 
     console.log(`[Share] Preparing to share: ${filePath}`);
@@ -47,7 +49,7 @@ async function share() {
         console.log('\nmagnet link:');
         console.log(link);
         console.log('\nTo download, run:');
-        console.log(`node download.js "${link}"`);
+        console.log(`node download.js "${link}" ./downloads`);
         console.log('\n[Share] Seeder running in background. Press Ctrl+C to stop.');
 
         // Keep process alive

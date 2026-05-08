@@ -55,7 +55,7 @@ export class MagnetkLink {
         if (this.fileName) parts.push(`dn=${encodeURIComponent(this.fileName)}`);
         if (this.fileSize > 0) parts.push(`xl=${this.fileSize}`);
         if (this.seedId) parts.push(`xs=${encodeURIComponent(this.seedId)}`);
-        if (this.relayAddr) parts.push(`relay=${this.relayAddr}`);
+        if (this.relayAddr) parts.push(`relay=${encodeURIComponent(this.relayAddr)}`);
         if (this.dhtEnabled) parts.push('dht=true');
 
         return `magnetk:?${parts.join('&')}`;

@@ -1,39 +1,28 @@
-import { MagnetkClient, CONNECTION_TYPE } from 'magnetk';
+import { MagnetkClient, CONNECTION_TYPE } from './index.js';
 import path from 'path';
-import os from 'os';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
 if (args.length < 1) {
-    console.error('Usage: node download.js <magnetk_link>');
+    console.error('Usage: node download.js <magnetk_link> [output_dir_or_file]');
     process.exit(1);
 }
 
 const magnetURI = args[0];
-
-// Determine Desktop Path
-const desktopPath = path.join(os.homedir(), '/OneDrive/Desktop');
+const outputTarget = args[1] || path.join(process.cwd(), 'downloads');
 
 async function download() {
     const client = new MagnetkClient({
-        dhtEnabled: true, // Enable DHT discovery
         relayUrl: '69.169.109.243',
         relayPort: 4003,
-        seedPort: 4002
+        seedPort: 4002,
+        holePunch: true,
+        relayAssisted: 'auto',
+        transportMode: 'auto'
     });
 
-    // Extract filename from URI roughly to show intention
-    // In real download, client.download handles parsing
-    let intendedFilename = 'downloaded_file';
-    try {
-        const urlParams = new URL(magnetURI.replace('magnetk:', 'http://dummy.com')).searchParams;
-        if (urlParams.has('dn')) intendedFilename = urlParams.get('dn');
-    } catch (e) { }
-
-    const outputPath = path.join(desktopPath, intendedFilename);
-
     console.log(`[Download] Initiating download for: ${magnetURI}`);
-    console.log(`[Download] Target: ${outputPath}`);
+    console.log(`[Download] Target: ${outputTarget}`);
 
     // Check Public Identity
     try {
@@ -49,15 +38,17 @@ async function download() {
 
     let lastPercent = -1;
     client.on('progress', (p) => {
-        // Show progress bar-like output
         const percent = Math.floor(p.percent);
         if (percent > lastPercent) {
             const barWidth = 20;
             const filled = Math.floor((percent / 100) * barWidth);
             const empty = barWidth - filled;
-            const bar = '█'.repeat(filled) + '░'.repeat(empty);
+            const bar = '#'.repeat(filled) + '-'.repeat(empty);
+            const chunkText = p.chunkTotalBytes
+                ? ` | chunk ${p.chunkBytes}/${p.chunkTotalBytes} bytes`
+                : '';
 
-            process.stdout.write(`\r[Download] [${bar}] ${p.percent.toFixed(1)}% | ${p.speed} KB/s | ${p.bytesDownloaded} / ${p.totalBytes} bytes`);
+            process.stdout.write(`\r[Download] [${bar}] ${p.percent.toFixed(1)}% | ${p.speed} KB/s | ${p.bytesDownloaded} / ${p.totalBytes} bytes${chunkText}`);
             lastPercent = percent;
         }
     });
@@ -71,14 +62,17 @@ async function download() {
     });
 
     client.on('error', (err) => console.error(`\n[Download] Error: ${err.message}`));
+    let savedPath = outputTarget;
+    client.on('complete', (info) => {
+        savedPath = info.filePath;
+    });
 
     try {
-        // Use new simplified API
-        await client.get(magnetURI, outputPath);
+        await client.get(magnetURI, outputTarget);
         console.log('\n\n==================================================');
         console.log('       DOWNLOAD COMPLETE!');
         console.log('==================================================');
-        console.log(`File saved to: ${outputPath}`);
+        console.log(`File saved to: ${savedPath}`);
 
         // Show stats
         const stats = client.lastDownloadStats;

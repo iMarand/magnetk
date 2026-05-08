@@ -14,9 +14,9 @@ func main() {
 	}
 	magnetLink := os.Args[1]
 
-	// Initialize Client
 	client, err := magnetk.NewClient(magnetk.ClientConfig{
-		DHTEnabled: true, // Enable DHT for trackerless discovery
+		HolePunch:     true,
+		RelayAssisted: "auto",
 	})
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)

@@ -7,12 +7,9 @@ import (
 )
 
 func main() {
-	// Initialize Seed
-	// explicit DHT configuration for robustness
 	seed, err := magnetk.NewSeed(magnetk.SeedConfig{
-		RelayAddr:  "69.169.109.243:4003", // Example Relay
-		DHTEnabled: true,                  // Enable DHT discovery
-		// DHTBootstrapPeers: []string{"..."}, // Optional custom bootstrap peers
+		RelayAddr: "69.169.109.243:4003",
+		HolePunch: true,
 	})
 	if err != nil {
 		log.Fatalf("Failed to start seed: %v", err)

@@ -50,9 +50,11 @@ async function run() {
 
                     // Generate a sample link if possible
                     if (result.seeds.length > 0) {
-                        const seed = result.seeds[0];
                         const xt = `urn:sha256:${fileHash}`;
-                        const relayAddr = `/ip4/${relay}/tcp/4001/p2p/${seed.peer_id}`; // Simplified
+                        client.config.relayUrl = relay;
+                        client.config.relayPort = port;
+                        const identity = await client.getRelayIdentity();
+                        const relayAddr = `/ip4/${relay}/tcp/4001/p2p/${identity.peer_id}`;
                         const link = `magnetk:?xt=${xt}&relay=${encodeURIComponent(relayAddr)}&dn=downloaded_file`;
                         console.log(`\nGenerated Magnetk Link:\n${link}\n`);
                     }

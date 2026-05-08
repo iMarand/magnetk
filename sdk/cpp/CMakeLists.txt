@@ -31,11 +31,22 @@ target_link_libraries(magnetk_cpp PUBLIC
 add_executable(test_sdk test/test_sdk.cpp)
 target_link_libraries(test_sdk PRIVATE magnetk_cpp)
 
+# Examples
+add_executable(cpp_share examples/share.cpp)
+target_link_libraries(cpp_share PRIVATE magnetk_cpp)
+
+add_executable(cpp_download examples/download.cpp)
+target_link_libraries(cpp_download PRIVATE magnetk_cpp)
+
 if(WIN32)
-    # Ensure MsQuic DLL is copied
-    add_custom_command(TARGET test_sdk POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${MSQUIC_ROOT}/artifacts/bin/windows/x64_Debug_schannel/msquic.dll"
-            "$<TARGET_FILE_DIR:test_sdk>/msquic.dll"
-    )
+    foreach(target test_sdk cpp_share cpp_download)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:magnetk_transport_shared>"
+                "$<TARGET_FILE_DIR:${target}>/magnetk_transport.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${MSQUIC_ROOT}/artifacts/bin/windows/x64_Debug_schannel/msquic.dll"
+                "$<TARGET_FILE_DIR:${target}>/msquic.dll"
+        )
+    endforeach()
 endif()

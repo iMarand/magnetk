@@ -175,7 +175,7 @@ export class MagnetkClient extends EventEmitter {
                 console.log(`[Magnetk-JS] Connected to ${host}:${port}`);
                 resolve(socket);
             });
-            socket.on('error', (err) => {
+            socket.once('error', (err) => {
                 console.error(`[Magnetk-JS] Connection error: ${err.message}`);
                 reject(err);
             });
@@ -416,9 +416,10 @@ export class MagnetkClient extends EventEmitter {
         const ml = typeof magnetURI === 'string' ? MagnetkLink.parse(magnetURI) : magnetURI;
         this.emit('download-start', { fileName: ml.fileName });
 
-        // Resolve relay info from link or config
-        const relayHost = ml.relayAddr ? ml.relayAddr.split('/')[2] : this.config.relayUrl;
-        const discoveryPort = this.config.relayPort;
+        const relayInfo = this._relayInfoFromLink(ml.relayAddr);
+        const relayHost = relayInfo?.host || this.config.relayUrl;
+        const discoveryPort = relayInfo?.discoveryPort || this.config.relayPort;
+        const relayAssisted = this._relayAssistedMode();
 
         let lookupResult;
         try {
@@ -472,21 +473,11 @@ export class MagnetkClient extends EventEmitter {
             console.log(`[Magnetk-JS] Relay lookup: no seeds found for this file hash`);
         }
 
-        // Fallback: extract seed IP from magnet link relay addr
-        // If the magnet link contains the relay multiaddr, the seed's IP might be known
-        // from the relay's host (when seed is on same VPS as relay)
-        if (addressesToTry.length === 0 && ml.relayAddr) {
-            // Try to parse /ip4/HOST/tcp/PORT from relay multiaddr
-            const parts = ml.relayAddr.split('/');
-            if (parts.length >= 3 && parts[1] === 'ip4') {
-                const seedAddr = `${parts[2]}:${this.config.seedPort}`;
-                console.log(`[Magnetk-JS] No routable seeds from relay, trying relay host as seed: ${seedAddr}`);
-                addressesToTry.push(seedAddr);
-            }
+        if (relayAssisted === 'true') {
+            addressesToTry.length = 0;
+        } else {
+            addressesToTry.push(`127.0.0.1:${this.config.seedPort}`);
         }
-
-        // Local fallback (same machine)
-        addressesToTry.push(`127.0.0.1:${this.config.seedPort}`);
 
         const uniqueAddrs = [...new Set(addressesToTry)];
         console.log(`[Magnetk-JS] Connection attempts: ${uniqueAddrs.join(', ')}`);
@@ -518,7 +509,7 @@ export class MagnetkClient extends EventEmitter {
         if (!socket) {
             // ===== RELAY PROXY FALLBACK =====
             // All direct connections failed — try connecting through the relay
-            if (this.config.enableRelayFallback !== false && lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
+            if (relayAssisted !== 'false' && this.config.enableRelayFallback !== false && lookupResult && lookupResult.found && lookupResult.seeds.length > 0) {
                 const seed = lookupResult.seeds[0];
                 console.log(`[Magnetk-JS] Direct connection failed, trying relay proxy for seed ${seed.peer_id.substring(0, 12)}...`);
 
@@ -573,9 +564,17 @@ export class MagnetkClient extends EventEmitter {
         try {
             await writer.writeJSON(MSG_TYPE.MSG_MANIFEST_REQ, { file_hash: ml.fileHash });
             const manifestFrame = await reader.readFrame();
+            if (manifestFrame.type === MSG_TYPE.MSG_ERROR) {
+                const err = JSON.parse(manifestFrame.payload.toString());
+                throw new Error(`Seed error: ${err.message}`);
+            }
+            if (manifestFrame.type !== MSG_TYPE.MSG_MANIFEST_RES) {
+                throw new Error(`Unexpected manifest response: 0x${manifestFrame.type.toString(16)}`);
+            }
             const manifest = JSON.parse(manifestFrame.payload.toString());
 
-            const fd = fs.openSync(outputPath, 'w');
+            const finalOutputPath = this._resolveOutputPath(outputPath, manifest.file_name || ml.fileName);
+            const fd = fs.openSync(finalOutputPath, 'w');
             let bytesDownloaded = 0;
             const startTime = Date.now();
 
@@ -585,7 +584,28 @@ export class MagnetkClient extends EventEmitter {
                     chunk_indices: [i]
                 });
 
-                const chunkFrame = await reader.readFrame();
+                const chunkFrame = await reader.readFrame((read, total) => {
+                    if (total < 64 * 1024) return;
+                    const partialBytes = bytesDownloaded + Math.max(0, read - 4);
+                    const elapsedS = (Date.now() - startTime) / 1000;
+                    const speedKBps = elapsedS > 0 ? (partialBytes / 1024 / elapsedS) : 0;
+                    this.emit('progress', {
+                        percent: (partialBytes / manifest.file_size) * 100,
+                        bytesDownloaded: partialBytes,
+                        totalBytes: manifest.file_size,
+                        speed: speedKBps.toFixed(1),
+                        chunkIndex: i,
+                        chunkBytes: Math.max(0, read - 4),
+                        chunkTotalBytes: Math.max(0, total - 4)
+                    });
+                });
+                if (chunkFrame.type === MSG_TYPE.MSG_ERROR) {
+                    const err = JSON.parse(chunkFrame.payload.toString());
+                    throw new Error(`Seed error: ${err.message}`);
+                }
+                if (chunkFrame.type !== MSG_TYPE.MSG_CHUNK_RES) {
+                    throw new Error(`Unexpected chunk response: 0x${chunkFrame.type.toString(16)}`);
+                }
                 const data = chunkFrame.payload.slice(4);
 
                 fs.writeSync(fd, data, 0, data.length, i * manifest.chunk_size);
@@ -604,7 +624,11 @@ export class MagnetkClient extends EventEmitter {
             }
 
             fs.closeSync(fd);
-            this.emit('complete', { filePath: outputPath });
+            const valid = await this._verifyFile(finalOutputPath, ml.fileHash);
+            if (!valid) {
+                throw new Error('Downloaded file hash mismatch');
+            }
+            this.emit('complete', { filePath: finalOutputPath });
         } finally {
             socket.end();
         }
@@ -671,6 +695,38 @@ export class MagnetkClient extends EventEmitter {
      */
     async hash(filePath) {
         return this._calculateHash(path.resolve(filePath));
+    }
+
+    _relayAssistedMode() {
+        if (this.config.relayAssisted === true) return 'true';
+        if (this.config.relayAssisted === false) return 'false';
+        return String(this.config.relayAssisted || 'auto').toLowerCase();
+    }
+
+    _relayInfoFromLink(relayAddr) {
+        if (!relayAddr) return null;
+        const parts = relayAddr.split('/');
+        if (parts.length < 5 || parts[1] !== 'ip4' || parts[3] !== 'tcp') return null;
+        const libp2pPort = parseInt(parts[4], 10);
+        if (!Number.isFinite(libp2pPort)) return null;
+        return {
+            host: parts[2],
+            libp2pPort,
+            discoveryPort: libp2pPort + 2
+        };
+    }
+
+    _resolveOutputPath(outputPath, fileName) {
+        const target = outputPath || fileName || 'downloaded_file';
+        const looksLikeDirectory = target.endsWith(path.sep) || path.extname(target) === '';
+        const finalPath = looksLikeDirectory ? path.join(target, fileName || 'downloaded_file') : target;
+        fs.mkdirSync(path.dirname(path.resolve(finalPath)), { recursive: true });
+        return finalPath;
+    }
+
+    async _verifyFile(filePath, expectedHash) {
+        const actual = await this._calculateHash(path.resolve(filePath));
+        return actual.toLowerCase() === expectedHash.toLowerCase();
     }
 
     _calculateHash(filePath) {
@@ -768,8 +824,10 @@ class FrameReader {
     constructor(socket) {
         this.socket = socket;
         this.buffer = Buffer.alloc(0);
-        this.pendingResolve = null;
+        this.pending = null;
         this.socket.on('data', (chunk) => this._onData(chunk));
+        this.socket.on('error', (err) => this._rejectPending(err));
+        this.socket.on('close', () => this._rejectPending(new Error('socket closed before frame completed')));
     }
 
     _onData(chunk) {
@@ -778,18 +836,21 @@ class FrameReader {
     }
 
     _tryResolve() {
-        if (!this.pendingResolve) return;
+        if (!this.pending) return;
 
         if (this.buffer.length >= 5) {
             const len = this.buffer.readUInt32BE(0);
             const type = this.buffer.readUInt8(4);
+            if (this.pending.onProgress) {
+                this.pending.onProgress(Math.min(Math.max(this.buffer.length - 5, 0), len), len);
+            }
 
             if (this.buffer.length >= 5 + len) {
                 const payload = this.buffer.slice(5, 5 + len);
                 this.buffer = this.buffer.slice(5 + len);
 
-                const resolve = this.pendingResolve;
-                this.pendingResolve = null;
+                const { resolve } = this.pending;
+                this.pending = null;
                 resolve({ type, payload });
 
                 // Try again for any buffered data
@@ -798,9 +859,16 @@ class FrameReader {
         }
     }
 
-    readFrame() {
-        return new Promise((resolve) => {
-            this.pendingResolve = resolve;
+    _rejectPending(err) {
+        if (!this.pending) return;
+        const { reject } = this.pending;
+        this.pending = null;
+        reject(err);
+    }
+
+    readFrame(onProgress = null) {
+        return new Promise((resolve, reject) => {
+            this.pending = { resolve, reject, onProgress };
             this._tryResolve();
         });
     }

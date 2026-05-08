@@ -2,16 +2,18 @@
 #include <iostream>
 #include <string>
 
-int main() {
+int main(int argc, char* argv[]) {
     magnetk::Seed::Config cfg;
-    // Configure Seed
     cfg.port = 4002;
-    cfg.dht_enabled = true; // Enable DHT
+    cfg.relay_addr = "69.169.109.243:4003";
+    cfg.hole_punch = true;
+    cfg.relay_assisted = "auto";
+
+    std::string filePath = argc > 1 ? argv[1] : "./test_file.txt";
     
     try {
         magnetk::Seed seed(cfg);
 
-        std::string filePath = "./test_file.txt";
         std::cout << "Sharing " << filePath << "..." << std::endl;
 
         std::string link = seed.publish(filePath);
