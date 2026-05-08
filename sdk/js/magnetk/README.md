@@ -1,133 +1,253 @@
 # Magnetk JavaScript SDK
 
-The JavaScript SDK for interacting with the Magnetk P2P network. It can parse/generate Magnetk links, spawn the native Go seeder for sharing, and download over the TCP protocol directly or through the relay TCP proxy.
+Node.js SDK for using Magnetk from JavaScript apps.
 
-Pure JavaScript downloads do not use MsQuic or native libp2p DCUtR hole punching. For the full native transport stack, use the Go CLI/SDK. The JS SDK still works across networks through the relay proxy when direct TCP is not reachable.
+The JS SDK can:
+
+- parse and generate `magnetk:?` links
+- share files by spawning the native Go `seed` binary
+- download files in pure JavaScript over direct TCP
+- fall back to the relay TCP proxy when direct TCP is unreachable
+- emit progress, connection type, and completion events
+- verify the downloaded file hash
+
+Pure JavaScript downloads do not use native MsQuic or native libp2p DCUtR hole punching directly. For the full native transport stack, use the Go CLI or Go SDK. The JS SDK is still useful across networks because it can use the relay TCP proxy.
+
+For the complete reference, see [Documentation.md](./Documentation.md).
 
 ## Installation
 
-If using as a standalone folder, simply place the `magnetk` folder into your `node_modules` or clone it into your project.
+From npm:
 
 ```bash
 npm install magnetk
 ```
 
-## Usage
+From this repository:
 
-### One-Line Seeding (Zero Config)
-The SDK automatically hashes your file, discovers the relay, and spawns the high-performance Go seeder in the background.
+```powershell
+cd sdk\js\magnetk
+npm install
+npm test
+```
 
-```javascript
+## Import
+
+```js
+import { MagnetkClient, MagnetkLink, CONNECTION_TYPE } from 'magnetk';
+```
+
+For local examples inside this folder:
+
+```js
+import { MagnetkClient } from './index.js';
+```
+
+## Requirements
+
+Sharing requires the native Magnetk `seed` binary. Downloading can run in pure JS.
+
+Make sure `seed` or `seed.exe` is in `PATH`, or set:
+
+```powershell
+$env:MAGNETK_SEEDER_PATH="D:\More_Projects\Projects\Magnetk\bin\seed.exe"
+```
+
+You can also pass it in code:
+
+```js
+const client = new MagnetkClient({
+  seederPath: 'D:\\More_Projects\\Projects\\Magnetk\\bin\\seed.exe'
+});
+```
+
+## Share A File
+
+```js
 import { MagnetkClient } from 'magnetk';
 
 const client = new MagnetkClient({
-    relayUrl: '69.169.109.243', // Optional: defaults to public relay
-    relayPort: 4003
+  relayUrl: '69.169.109.243',
+  relayPort: 4003,
+  seedPort: 4002,
+  holePunch: true,
+  relayAssisted: 'auto',
+  transportMode: 'auto'
 });
 
-// Seed a file and get a shareable link
-const link = await client.seed('./my-app.zip');
-console.log(`Share this link: ${link}`);
+client.on('hashing', p => console.log(`hashing ${p.percent}%`));
+client.on('seeding', info => console.log(`seeding ${info.fileName}`));
+client.on('relay-connected', r => console.log(`relay connected: ${r.host}`));
 
-// Keep the process alive to serve peers (Ctrl+C to stop)
+const link = await client.share('./my-file.zip');
+console.log('Share this link:', link);
+
 await client.keepSeeding();
 ```
 
-### One-Line Downloading
-Download files with automatic connection optimization (Direct TCP > Local TCP > Relay TCP proxy).
+Run the included example:
 
-```javascript
-const magnetURI = 'magnetk:?xt=urn:sha256:abc...&relay=...';
-
-console.log('Downloading...');
-await client.download(magnetURI, './my-app-downloaded.zip');
-console.log('Done!');
+```powershell
+cd sdk\js\magnetk
+node share.js ./app.txt
 ```
 
-### Event-Driven Progress tracking
-Track every stage of the transfer with the new Event API.
+## Download A File
 
-```javascript
-const client = new MagnetkClient();
+```js
+import { MagnetkClient, CONNECTION_TYPE } from 'magnetk';
 
-// Seeding Events
-client.on('hashing', (p) => console.log(`Hashing file: ${p.percent}%`));
-client.on('seeding', (info) => console.log(`Seeding ${info.fileName} (${info.fileSize} bytes)`));
-client.on('relay-connected', (r) => console.log(`Live on Relay: ${r.host}`));
-
-// Download Events
-client.on('download-start', (info) => console.log(`Starting: ${info.fileName}`));
-client.on('progress', (p) => {
-    process.stdout.write(`\rDownload: ${p.percent.toFixed(1)}% | Speed: ${p.speed} KB/s`);
+const client = new MagnetkClient({
+  relayUrl: '69.169.109.243',
+  relayPort: 4003,
+  seedPort: 4002,
+  relayAssisted: 'auto'
 });
-client.on('connection-type', (c) => console.log(`\nConnection Mode: ${c.type}`)); // DIRECT, RELAYED, LOCAL
-client.on('complete', (info) => console.log(`\nSaved to: ${info.filePath}`));
 
-// Error Handling
-client.on('error', (err) => console.error(`Error (${err.code}): ${err.message}`));
+client.on('connection-type', c => {
+  if (c.type === CONNECTION_TYPE.DIRECT) console.log('direct TCP');
+  if (c.type === CONNECTION_TYPE.LOCAL) console.log('local TCP');
+  if (c.type === CONNECTION_TYPE.RELAYED) console.log('relay proxy');
+});
+
+client.on('progress', p => {
+  process.stdout.write(
+    `\r${p.percent.toFixed(1)}% ${p.bytesDownloaded}/${p.totalBytes} bytes ${p.speed} KB/s`
+  );
+});
+
+client.on('complete', info => {
+  console.log(`\nsaved to ${info.filePath}`);
+});
+
+await client.get('magnetk:?...', './downloads');
 ```
 
-## Advanced Features
+Run the included example:
 
-### NAT Traversal (STUN)
-The SDK integrates STUN to discover your public identity. You can manually check your public IP/Port:
-
-```javascript
-const identity = await client.getPublicIdentity();
-console.log(`Public Identity: ${identity.ip}:${identity.port}`);
+```powershell
+cd sdk\js\magnetk
+node download.js "magnetk:?..." ./downloads
 ```
 
-### Manual CLI
-For quick operations, use the global `magnetk` command:
+## Configuration
+
+```js
+const client = new MagnetkClient({
+  relayUrl: '69.169.109.243',
+  relayPort: 4003,
+  relays: [],
+  seedPort: 4002,
+  seederPath: null,
+  configPath: null,
+
+  dhtEnabled: false,
+  dhtBootstrapPeers: [],
+  discoveryPriority: ['dht', 'relay', 'direct'],
+
+  stunServers: ['stun:stun.l.google.com:19302'],
+  holePunch: true,
+  relayAssisted: 'auto',
+  enableRelayFallback: true,
+  relayTimeout: 5000,
+  transportMode: 'auto',
+
+  autoConfig: true
+});
+```
+
+Common settings:
+
+- `relayUrl`: relay host, for example `69.169.109.243`
+- `relayPort`: relay TCP discovery fallback port, usually `4003`
+- `seedPort`: native seed data port, usually `4002`
+- `relayAssisted`: `"auto"`, `"true"`, `"false"`, or boolean
+- `enableRelayFallback`: allows the relay TCP proxy path
+- `seederPath`: explicit path to `seed` or `seed.exe`
+
+## Relay-Assisted Behavior
+
+Download order:
+
+1. Direct TCP addresses returned by relay discovery.
+2. Local TCP fallback.
+3. Relay TCP proxy if allowed.
+
+Set `relayAssisted: "false"` when you want direct-only behavior. On mobile hotspots or carrier NAT, direct connections often fail, so use `"auto"` for practical cross-network downloads.
+
+## Events
+
+Sharing:
+
+- `validating-relay`
+- `hashing`: `{ percent }`
+- `relay-connected`: `{ host, port }`
+- `seeding`: `{ fileName, fileSize, hash }`
+- `error`: `{ code, message }`
+
+Downloading:
+
+- `download-start`: `{ fileName }`
+- `connection-type`: `{ type }`
+- `progress`: `{ percent, bytesDownloaded, totalBytes, speed, chunkIndex, chunkBytes, chunkTotalBytes }`
+- `complete`: `{ filePath }`
+- `error`: `{ code, message }`
+
+## API Summary
+
+- `new MagnetkClient(config)`
+- `client.share(filePath)` / `client.seed(filePath)`
+- `client.keepSeeding()`
+- `client.stop()`
+- `client.get(magnetURI, outputPath)` / `client.download(magnetURI, outputPath)`
+- `client.lookupSeeds(fileHash)`
+- `client.hash(filePath)`
+- `MagnetkLink.parse(uri)`
+- `link.toString()`
+
+## CLI
+
+The package includes a small CLI:
 
 ```bash
-# Download a file
+magnetk lookup <sha256_hash> --relay 69.169.109.243
 magnetk download "magnetk:?..." --output ./file.zip
 ```
 
-## API Reference
-
-### `MagnetkClient`
-- `constructor(config)`: `{ relayUrl, relayPort, seedPort, enableSTUN }`
-- `seed(filePath)`: Returns `Promise<magnetLink>`. Spawns background seeder.
-- `download(uri, outputPath)`: Downloads file. Emits progress events.
-- `stop()`: Kills all background seeder processes.
-- `getRelayIdentity()`: Fetches Relay Peer ID and Multiaddrs.
-
-### Events
-- `hashing`: `{ percent }`
-- `seeding`: `{ fileName, fileSize, hash }`
-- `progress`: `{ percent, bytesDownloaded, totalBytes, speed }`
-- `connection-type`: `{ type }` (DIRECT, RELAYED, LOCAL)
-- `error`: `{ code, message }`
-
-## Prerequisites
-
-The JavaScript SDK is a lightweight wrapper around the high-performance **Magnetk Go Binaries** for seeding. Downloading can run in pure JavaScript over direct TCP or the relay TCP proxy.
-
-1.  **Download** the latest binaries for your platform (Windows/Linux/macOS).
-2.  **Ensure** they are in your system `PATH` OR provide the path manually in the SDK config.
-
-### Manual Configuration
-```javascript
-const client = new MagnetkClient({
-    seederPath: 'C:\\path\\to\\seed.exe', // Explicit path
-    relayUrl: '69.169.109.243'
-});
-```
-
-### Environment Variables
-You can also set the binary path globally:
-- `MAGNETK_SEEDER_PATH`: Path to the `seed.exe` binary.
-
 ## Troubleshooting
 
-### "spawn seed.exe ENOENT" Error
-This means the SDK cannot find the Go seeder binary.
-1. Check if `seed.exe` is in your system `PATH`.
-2. Or provide `seederPath` in the `MagnetkClient` constructor.
-3. Or set the `MAGNETK_SEEDER_PATH` environment variable.
+### `spawn seed.exe ENOENT`
+
+The SDK cannot find the native seeder.
+
+Fix it by:
+
+- putting `seed.exe` in `PATH`
+- setting `MAGNETK_SEEDER_PATH`
+- passing `seederPath` in `MagnetkClient`
+
+### Direct works on same Wi-Fi but not across networks
+
+That is normal when NAT or hotspot routing blocks inbound connections. Use:
+
+```js
+relayAssisted: 'auto'
+```
+
+The SDK will fall back to the relay TCP proxy.
+
+### Need full native MsQuic/libp2p behavior
+
+Use the Go CLI or Go SDK. The JS SDK downloader is pure TCP/proxy.
+
+## Verify
+
+```powershell
+cd sdk\js\magnetk
+npm test
+npm pack --dry-run
+```
 
 ## License
-MIT
 
+MIT
