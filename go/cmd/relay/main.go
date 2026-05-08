@@ -93,24 +93,27 @@ func main() {
 		libp2p.Transport(libp2pquic.NewTransport),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.NATPortMap(),
-		libp2p.EnableRelayService(),
 	)
 	if err != nil {
 		log.Fatalf("[relay] Failed to create libp2p host: %v", err)
 	}
 
 	// Explicitly start circuit relay v2 with generous limits
+	relayResources := relay.DefaultResources()
+	relayResources.Limit = &relay.RelayLimit{
+		Duration: 30 * time.Minute,
+		Data:     1 << 30, // 1 GB per direction per relayed connection
+	}
+	relayResources.BufferSize = 64 * 1024
 	_, err = relay.New(h,
-		relay.WithLimit(&relay.RelayLimit{
-			Duration: 10 * time.Minute,
-			Data:     1 << 30, // 1 GB per relay connection
-		}),
-		relay.WithResources(relay.DefaultResources()),
+		relay.WithResources(relayResources),
 	)
 	if err != nil {
 		log.Printf("[relay] Warning: Circuit relay v2 failed to start: %v", err)
 	} else {
-		log.Println("[relay] ✓ Circuit relay v2 enabled (NAT traversal for seeds behind NAT)")
+		log.Printf("[relay] ✓ Circuit relay v2 enabled (limit: %s, %.0f MB per direction)",
+			relayResources.Limit.Duration,
+			float64(relayResources.Limit.Data)/1024/1024)
 	}
 
 	log.Printf("[relay] LibP2P Peer ID: %s", h.ID().String())

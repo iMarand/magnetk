@@ -9,6 +9,8 @@ import (
 	"magnetk/pkg/types"
 )
 
+const onlineSeedTTL = 90 * time.Second
+
 // FileRegistry maintains a registry of published files and their seeds
 type FileRegistry struct {
 	files     map[string]*types.FileEntry // key: file hash
@@ -98,8 +100,9 @@ func (r *FileRegistry) LookupFile(fileHash string) (*types.FileEntry, bool) {
 
 	// Filter to online seeds only
 	onlineSeeds := make([]types.PeerInfo, 0)
+	now := time.Now()
 	for _, s := range entry.Seeds {
-		if s.Online {
+		if s.Online && now.Sub(s.LastSeen) <= onlineSeedTTL {
 			onlineSeeds = append(onlineSeeds, s)
 		}
 	}
