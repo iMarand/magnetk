@@ -322,6 +322,13 @@ class MagnetkClient:
         if self.transport_mode and self.transport_mode != 'auto':
             cmd.extend(['-transport', self.transport_mode])
 
+        if self.hole_punch:
+            cmd.append('-holepunch')
+
+        if self.relay_assisted is not None:
+            mode = 'true' if self.relay_assisted is True else ('false' if self.relay_assisted is False else str(self.relay_assisted))
+            cmd.extend(['-relay-assisted', mode])
+
         print(f"[Magnetk-Py] Spawning peer: {' '.join(cmd)}")
         
         # Run and wait for completion
