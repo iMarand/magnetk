@@ -102,6 +102,7 @@ export class MagnetkClient extends EventEmitter {
             relayAssisted: 'auto',         // 'auto' | true | false — relay-assisted data transfer
             enableRelayFallback: true,     // Fall back to relay if direct P2P fails
             relayTimeout: 5000,            // ms to wait for direct connection before relay fallback
+            transportMode: 'auto',         // 'auto' | 'quic' | 'tcp' — data transport mode
 
             // Auto-config: create settings.conf if missing
             autoConfig: true,

@@ -56,6 +56,7 @@ public:
         std::string bind_address;
         uint16_t    max_conns = 10;
         bool        no_cert_validation = true;
+        std::string transport_mode = "auto"; // "auto" | "quic" | "tcp"
     };
 
     Client(const Config& config = Config());

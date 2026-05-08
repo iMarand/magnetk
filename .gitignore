@@ -39,3 +39,4 @@ sdk/cpp/build/
 
 # MsQuic artifacts (if built locally and not tracked)
 msquic/
+export

@@ -25,6 +25,22 @@
 #include <string.h>
 #include <stdio.h>
 
+/* ===== Atomic refcount helpers =====
+ * Used to keep stream/connection structs alive while either Go or the
+ * MsQuic callback thread still holds a reference. Without this, Go can
+ * race with the SHUTDOWN_COMPLETE callback and dereference freed memory
+ * — observable as a SEGV in magnetk_stream_close() with PC=0x0.
+ */
+#ifdef _WIN32
+#define MAGNETK_ATOMIC_DEC(p) InterlockedDecrement((volatile long*)(p))
+#define MAGNETK_ATOMIC_XCHG_PTR(target, val) \
+    ((HQUIC)InterlockedExchangePointer((PVOID volatile*)(target), (PVOID)(val)))
+#else
+#define MAGNETK_ATOMIC_DEC(p) __sync_sub_and_fetch((volatile long*)(p), 1)
+#define MAGNETK_ATOMIC_XCHG_PTR(target, val) \
+    __sync_lock_test_and_set((target), (val))
+#endif
+
 #ifdef _WIN32
 #include <wincrypt.h>
 #include <ncrypt.h>
@@ -136,6 +152,11 @@ struct magnetk_connection {
 struct magnetk_stream {
     magnetk_connection_t*        conn;
     HQUIC                       handle;
+    /* Cached at creation so close() doesn't deref a freed connection. */
+    const QUIC_API_TABLE*       msquic_api;
+    /* Refcount: starts at 2 (Go owner + MsQuic callback owner). Stream
+     * is freed by whichever side decrements to 0. */
+    volatile long               ref_count;
     magnetk_on_data_fn           on_data;
     magnetk_on_send_complete_fn  on_send_complete;
     magnetk_on_close_fn          on_close;
@@ -161,6 +182,10 @@ struct magnetk_stream {
 #endif
     volatile int                send_complete;
 };
+
+/* Forward declarations for the lifecycle helpers. */
+static void magnetk_stream_free_resources(magnetk_stream_t* stream);
+static void magnetk_stream_release(magnetk_stream_t* stream);
 
 /* ===== Forward Declarations ===== */
 static QUIC_STATUS QUIC_API listener_callback(HQUIC Listener, void* Context, QUIC_LISTENER_EVENT* Event);
@@ -520,6 +545,8 @@ static QUIC_STATUS QUIC_API server_conn_callback(
 
         stream->conn = conn;
         stream->handle = Event->PEER_STREAM_STARTED.Stream;
+        stream->msquic_api = conn->transport->msquic;  /* Cache for safe close */
+        stream->ref_count = 2;                          /* Go + MsQuic */
         stream->on_data = conn->on_data;
         stream->on_close = conn->on_close;
         stream->user_data = conn->user_data;
@@ -611,6 +638,8 @@ static QUIC_STATUS QUIC_API client_conn_callback(
 
         stream->conn = conn;
         stream->handle = Event->PEER_STREAM_STARTED.Stream;
+        stream->msquic_api = conn->transport->msquic;  /* Cache for safe close */
+        stream->ref_count = 2;                          /* Go + MsQuic */
         stream->on_data = conn->on_data;
         stream->on_close = conn->on_close;
         stream->user_data = conn->user_data;
@@ -850,18 +879,13 @@ static QUIC_STATUS QUIC_API stream_callback(
         if (stream->on_close) {
             stream->on_close(stream, MAGNETK_ERR_CLOSED, stream->user_data);
         }
-#ifdef _WIN32
-        if (stream->recv_event) CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        if (stream->send_event) CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
-        stream->conn->transport->msquic->StreamClose(Stream);
-        free(stream);
+        /* Use cached API; stream->conn may already be freed at this point. */
+        if (stream->msquic_api) {
+            stream->msquic_api->StreamClose(Stream);
+        }
+        /* Drop MsQuic's reference. Resources are released by whichever
+         * side hits ref_count == 0 (see magnetk_stream_release). */
+        magnetk_stream_release(stream);
         return QUIC_STATUS_SUCCESS;
 
     default:
@@ -886,6 +910,8 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
     if (!stream) return MAGNETK_ERR_MEMORY;
 
     stream->conn = conn;
+    stream->msquic_api = conn->transport->msquic;  /* Cache for safe close */
+    stream->ref_count = 2;                          /* Go + MsQuic */
     stream->on_data = on_data;
     stream->on_send_complete = on_send_complete;
     stream->on_close = on_close;
@@ -909,16 +935,9 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
         stream,
         &stream->handle);
     if (QUIC_FAILED(status)) {
-#ifdef _WIN32
-        CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
+        /* StreamOpen failed: MsQuic never took ownership, so no callback
+         * will fire. Free directly without going through release. */
+        magnetk_stream_free_resources(stream);
         free(stream);
         return MAGNETK_ERR_STREAM;
     }
@@ -928,16 +947,7 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
         QUIC_STREAM_START_FLAG_NONE);
     if (QUIC_FAILED(status)) {
         conn->transport->msquic->StreamClose(stream->handle);
-#ifdef _WIN32
-        CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
+        magnetk_stream_free_resources(stream);
         free(stream);
         return MAGNETK_ERR_STREAM;
     }
@@ -1025,15 +1035,43 @@ MAGNETK_API magnetk_status_t magnetk_stream_shutdown_send(magnetk_stream_t* stre
     return QUIC_FAILED(status) ? MAGNETK_ERR_STREAM : MAGNETK_OK;
 }
 
+/* Tear down stream OS resources but do NOT free the struct itself. */
+static void magnetk_stream_free_resources(magnetk_stream_t* stream) {
+    if (!stream) return;
+#ifdef _WIN32
+    if (stream->recv_event) { CloseHandle(stream->recv_event); stream->recv_event = NULL; }
+    DeleteCriticalSection(&stream->recv_lock);
+    if (stream->send_event) { CloseHandle(stream->send_event); stream->send_event = NULL; }
+#else
+    pthread_mutex_destroy(&stream->recv_mutex);
+    pthread_cond_destroy(&stream->recv_cond);
+    pthread_mutex_destroy(&stream->send_mutex);
+    pthread_cond_destroy(&stream->send_cond);
+#endif
+}
+
+/* Drop one reference; free the struct when the last owner releases. */
+static void magnetk_stream_release(magnetk_stream_t* stream) {
+    if (!stream) return;
+    if (MAGNETK_ATOMIC_DEC(&stream->ref_count) == 0) {
+        magnetk_stream_free_resources(stream);
+        free(stream);
+    }
+}
+
 MAGNETK_API void magnetk_stream_close(magnetk_stream_t* stream) {
     if (!stream) return;
-    if (stream->handle) {
-        stream->conn->transport->msquic->StreamShutdown(
-            stream->handle,
-            QUIC_STREAM_SHUTDOWN_FLAG_ABORT,
-            0);
+    /* Atomically take ownership of the handle so a concurrent shutdown
+     * callback can't double-shutdown. Use the cached API table so we
+     * never deref stream->conn — which may already be freed. */
+    HQUIC handle = MAGNETK_ATOMIC_XCHG_PTR(&stream->handle, NULL);
+    const QUIC_API_TABLE* api = stream->msquic_api;
+    if (handle && api) {
+        api->StreamShutdown(handle, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
     }
-    /* Stream will be freed in shutdown complete callback */
+    /* Drop Go's reference. If MsQuic callback already finished its
+     * release, this frees the struct; otherwise the callback frees later. */
+    magnetk_stream_release(stream);
 }
 
 MAGNETK_API void magnetk_stream_set_userdata(magnetk_stream_t* stream, void* user_data) {

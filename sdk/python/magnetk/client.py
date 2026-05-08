@@ -103,6 +103,7 @@ class MagnetkClient:
         self.relay_assisted = self.config.get('relay_assisted', 'auto')  # 'auto' | True | False
         self.enable_relay_fallback = self.config.get('enable_relay_fallback', True)
         self.relay_timeout = self.config.get('relay_timeout', 5000)  # ms
+        self.transport_mode = self.config.get('transport_mode', 'auto')  # 'auto' | 'quic' | 'tcp'
         
         # Paths
         self.seeder_path = self.config.get('seeder_path')
@@ -317,6 +318,9 @@ class MagnetkClient:
         
         if self.dht_enabled:
             cmd.append('-dht')
+
+        if self.transport_mode and self.transport_mode != 'auto':
+            cmd.extend(['-transport', self.transport_mode])
 
         print(f"[Magnetk-Py] Spawning peer: {' '.join(cmd)}")
         

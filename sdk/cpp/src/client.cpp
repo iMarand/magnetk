@@ -49,6 +49,10 @@ void Client::download(const std::string& magnet_uri, const std::string& output_p
     // Add config? 
     // cmd += "-config settings.conf ";
 
+    if (!config_.transport_mode.empty() && config_.transport_mode != "auto") {
+        cmd += "-transport " + config_.transport_mode + " ";
+    }
+
     std::cout << "[CPP-SDK] Executing: " << cmd << std::endl;
 
     std::array<char, 128> buffer;

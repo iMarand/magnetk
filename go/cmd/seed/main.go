@@ -35,6 +35,8 @@ import (
 	"magnetk/pkg/config"
 	magnetkDHT "magnetk/pkg/dht"
 	magnetkLink "magnetk/pkg/magnetk"
+	magnetkNAT "magnetk/pkg/nat"
+	magnetkNet "magnetk/pkg/network"
 	"magnetk/pkg/protocol"
 	"magnetk/pkg/transport"
 )
@@ -224,6 +226,19 @@ func main() {
 		}
 	}()
 
+	// ===== Open UPnP/NAT-PMP mapping for the transport port =====
+	// Lets peers across NATs reach this seed's public IP:port directly,
+	// bypassing the relay. No-op when the gateway doesn't speak UPnP.
+	var natMappings []*magnetkNAT.Mapping
+	if cfg.HolePunch {
+		natMappings = magnetkNAT.Open(cfg.TransportPort, "magnetk-seed")
+		defer func() {
+			for _, m := range natMappings {
+				m.Close()
+			}
+		}()
+	}
+
 	// ===== 4. Initialize DHT (if enabled) =====
 	var dhtNode *magnetkDHT.DHT
 	if cfg.DHTEnabled {
@@ -270,7 +285,7 @@ func main() {
 		log.Println("[seed] Connected to relay")
 
 		// Register with relay
-		err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg)
+		err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg, natMappings)
 		if err != nil {
 			log.Fatalf("[seed] Failed to publish file: %v", err)
 		}
@@ -449,7 +464,7 @@ func serveChunkRequest(
 }
 
 // publishToRelay registers the file with the relay via libp2p discovery stream
-func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config) error {
+func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, filePath string, cfg *config.Config, natMappings []*magnetkNAT.Mapping) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -459,32 +474,8 @@ func publishToRelay(h host.Host, relayID peer.ID, manifest *chunk.FileManifest, 
 	}
 	defer s.Close()
 
-	// Determine advertised address
-	addresses := []string{}
-	advertisedAddr := cfg.BindAddress
-
-	if cfg.AdvertisedAddress != "" {
-		// Use configured advertised address (e.g., VPS public IP)
-		advertisedAddr = cfg.AdvertisedAddress
-		log.Printf("[seed] Using configured advertised address: %s", advertisedAddr)
-	} else {
-		// Fallback to STUN discovery
-		publicIP, publicPort, err := getPublicIdentity("stun.l.google.com:19302")
-		if err == nil {
-			advertisedAddr = publicIP
-			log.Printf("[seed] Discovered public identity via STUN: %s:%d", publicIP, publicPort)
-		} else {
-			log.Printf("[seed] Warning: No advertised address configured and STUN failed, using bind address")
-		}
-	}
-
-	// Add advertised addresses
-	addresses = append(addresses,
-		fmt.Sprintf("/ip4/%s/tcp/%d", advertisedAddr, cfg.TransportPort),
-		fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", advertisedAddr, cfg.TransportPort),
-	)
-
-	log.Printf("[seed] Publishing addresses: %v", addresses)
+	addresses := buildSeedAddresses(cfg, natMappings)
+	log.Printf("[seed] Publishing %d addresses: %v", len(addresses), addresses)
 
 	payload := protocol.LegacyPublishFilePayload{
 		PeerID:     h.ID().String(),
@@ -574,6 +565,64 @@ func getPublicIdentity(stunServer string) (string, int, error) {
 		offset += 4 + int(attrLen)
 	}
 	return "", 0, fmt.Errorf("XOR-MAPPED-ADDRESS attribute not found in response")
+}
+
+// buildSeedAddresses returns the multiaddr list a seed advertises to peers.
+// Order: LAN IPs first (same-network direct hits), then UPnP-mapped public
+// addresses (cross-NAT direct), then configured/STUN-discovered public IP
+// (last resort, often unreachable without UPnP). Duplicates are removed.
+func buildSeedAddresses(cfg *config.Config, natMappings []*magnetkNAT.Mapping) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(s string) {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	addPair := func(ip string, tcpPort, udpPort int) {
+		if ip == "" || ip == "0.0.0.0" {
+			return
+		}
+		add(fmt.Sprintf("/ip4/%s/tcp/%d", ip, tcpPort))
+		add(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", ip, udpPort))
+	}
+
+	// 1. LAN IPs — peers on the same network connect directly without NAT.
+	for _, ip := range magnetkNet.LANIPs() {
+		addPair(ip, cfg.TransportPort, cfg.TransportPort)
+	}
+
+	// 2. UPnP-mapped external addresses — cross-NAT direct connection.
+	// External port may differ from internal if router resolved a conflict.
+	for _, m := range natMappings {
+		if m.ExternalIP == nil {
+			continue
+		}
+		switch m.Protocol {
+		case "tcp":
+			add(fmt.Sprintf("/ip4/%s/tcp/%d", m.ExternalIP, m.ExternalPort))
+		case "udp":
+			add(fmt.Sprintf("/ip4/%s/udp/%d/quic-v1", m.ExternalIP, m.ExternalPort))
+		}
+	}
+
+	// 3. Configured advertised address (e.g., VPS public IP via env/config).
+	if cfg.AdvertisedAddress != "" {
+		addPair(cfg.AdvertisedAddress, cfg.TransportPort, cfg.TransportPort)
+		log.Printf("[seed] Using configured advertised address: %s", cfg.AdvertisedAddress)
+	} else {
+		// 4. STUN-discovered public IP — last resort. Reachable only if
+		// router happens to forward the port (rare without UPnP).
+		if publicIP, _, err := getPublicIdentity("stun.l.google.com:19302"); err == nil {
+			addPair(publicIP, cfg.TransportPort, cfg.TransportPort)
+			log.Printf("[seed] Discovered public identity via STUN: %s", publicIP)
+		} else {
+			log.Printf("[seed] Warning: No advertised address and STUN failed (%v)", err)
+		}
+	}
+
+	return out
 }
 
 func sendHeartbeat(h host.Host, relayID peer.ID) error {

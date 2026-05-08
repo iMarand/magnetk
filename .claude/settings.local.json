@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go env *)",
+      "Bash(ls \"C:\\\\Users\\\\iMarand\\\\go\\\\pkg\\\\mod\\\\github.com\\\\libp2p\" 2>&1 | head -20)",
+      "Read(//c/Users/iMarand/go/pkg/mod/github.com/libp2p/**)",
+      "Bash(go build *)",
+      "Bash(go mod *)",
+      "Bash(go vet *)",
+      "Read(//c/msys64/mingw64/bin/**)",
+      "Bash(gcc --version)",
+      "Bash(export PATH=\"/c/msys64/mingw64/bin:$PATH\")",
+      "Bash(export CGO_ENABLED=1)",
+      "Bash(cmake --build .)",
+      "Bash(cp \"d:/More_Projects/Projects/Magnetk/c/build/libmagnetk_transport.dll\" \"d:/More_Projects/Projects/Magnetk/bin/\")",
+      "Bash(cp ../bin/libmagnetk_transport.dll ../bin/relay.exe ../bin/seed.exe ../bin/peer.exe ../export/bin/)"
+    ]
+  }
+}

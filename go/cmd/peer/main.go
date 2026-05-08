@@ -18,12 +18,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	libp2pProto "github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
@@ -49,6 +54,7 @@ func main() {
 	holePunch := flag.Bool("holepunch", false, "Enable NAT hole punching")
 	relayAssisted := flag.String("relay-assisted", "", "Relay-assisted transfer mode: auto, true, false")
 	relayAddresses := flag.String("relay-addresses", "", "Comma-separated additional relay addresses")
+	transportMode := flag.String("transport", "", "Transport mode: auto (QUIC+TCP fallback), quic (QUIC only), tcp (TCP only)")
 	flag.Parse()
 
 	if *magnetURI == "" {
@@ -93,6 +99,9 @@ func main() {
 	}
 	if *relayAssisted != "" {
 		cfg.RelayAssisted = *relayAssisted
+	}
+	if *transportMode != "" {
+		cfg.TransportMode = strings.ToLower(*transportMode)
 	}
 	if *relayAddresses != "" {
 		addrs := strings.Split(*relayAddresses, ",")
@@ -193,7 +202,28 @@ func main() {
 	}
 	log.Printf("[peer] Found %d seed(s)", len(seeds))
 
-	// ===== 6. Start download via MsQuic =====
+	// ===== 6. Download with fallback through all seeds =====
+	// Filter non-routable addresses from seeds
+	var routableSeeds []protocol.SeedInfo
+	for _, s := range seeds {
+		if s.TransportAddr == "" {
+			continue
+		}
+		host, _ := parseHostPort(s.TransportAddr)
+		if isRoutableAddr(host) {
+			routableSeeds = append(routableSeeds, s)
+		} else {
+			log.Printf("[peer] Skipping non-routable seed address: %s", s.TransportAddr)
+		}
+	}
+	// Always add localhost as last resort (same-machine)
+	if len(seeds) > 0 {
+		localSeed := seeds[0]
+		localSeed.TransportAddr = fmt.Sprintf("127.0.0.1:%d", cfg.TransportPort)
+		routableSeeds = append(routableSeeds, localSeed)
+	}
+	log.Printf("[peer] Routable seeds to try: %d", len(routableSeeds))
+
 	// Set up download with cancel support
 	doneCh := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
@@ -201,11 +231,36 @@ func main() {
 
 	go func() {
 		defer close(doneCh)
-		err := downloadFile(seeds[0], ml, outFile, cfg, stateMgr, existingState)
-		if err != nil {
-			log.Printf("[peer] Download failed: %v", err)
+		for i, s := range routableSeeds {
+			log.Printf("[peer] Trying seed %d/%d: %s at %s", i+1, len(routableSeeds), s.PeerID[:12], s.TransportAddr)
+			err := downloadFile(s, ml, outFile, cfg, stateMgr, existingState)
+			if err == nil {
+				return // Success!
+			}
+			log.Printf("[peer] Seed %s failed: %v", s.PeerID[:12], err)
+		}
+		log.Printf("[peer] All %d direct seed attempts failed", len(routableSeeds))
+
+		// ===== libp2p tunnel fallback =====
+		// All direct addresses unreachable (typically: both peers behind
+		// NATs without UPnP). Connect by libp2p PeerID through the relay's
+		// circuit-relay-v2 service. Slower than direct (data flows via the
+		// relay) but works across any NAT topology.
+		if relay == "" {
 			return
 		}
+		log.Println("[peer] Trying libp2p circuit-relay tunnel...")
+		for _, s := range seeds {
+			if s.PeerID == "" {
+				continue
+			}
+			err := downloadFileViaLibp2p(h, s, relay, ml, outFile, cfg, stateMgr, existingState)
+			if err == nil {
+				return
+			}
+			log.Printf("[peer] libp2p tunnel to %s failed: %v", s.PeerID[:12], err)
+		}
+		log.Println("[peer] All discovery and connection methods exhausted")
 	}()
 
 	select {
@@ -230,53 +285,59 @@ func downloadFile(
 	var writer *protocol.FrameWriter
 	var cleanup func()
 
-	// Try MsQuic first, fall back to TCP
+	// Try MsQuic first, fall back to TCP (respects TransportMode config)
 	msquicOK := false
-	log.Printf("[peer] Connecting to seed %s at %s", seed.PeerID[:12], seed.TransportAddr)
-
-	// --- Attempt 1: MsQuic ---
-	transportCfg := transport.Config{
-		BindAddress:       cfg.EffectiveBindAddress(),
-		Port:              0,
-		NoCertValidation:  cfg.NoCertValidation,
-		ALPN:              "magnetk",
-		MaxConnections:    10,
-		IdleTimeoutMs:     60000,
-		SendBufferSize:    cfg.SendBufferSizeBytes(),
-		RecvBufferSize:    cfg.RecvBufferSizeBytes(),
-		MaxStreamsPerConn: uint16(cfg.MaxStreamsPerConnection),
-		MaxThroughput:     true,
+	mode := cfg.TransportMode
+	if mode == "" {
+		mode = "auto"
 	}
+	log.Printf("[peer] Connecting to seed %s at %s (transport: %s)", seed.PeerID[:12], seed.TransportAddr, mode)
 
-	quicTransport, err := transport.NewTransport(transportCfg)
-	if err == nil {
-		conn, err := quicTransport.Connect(host, port)
+	// --- Attempt 1: MsQuic (skip if mode == "tcp") ---
+	if mode != "tcp" {
+		transportCfg := transport.Config{
+			BindAddress:       cfg.EffectiveBindAddress(),
+			Port:              0,
+			NoCertValidation:  cfg.NoCertValidation,
+			ALPN:              "magnetk",
+			MaxConnections:    10,
+			IdleTimeoutMs:     60000,
+			SendBufferSize:    cfg.SendBufferSizeBytes(),
+			RecvBufferSize:    cfg.RecvBufferSizeBytes(),
+			MaxStreamsPerConn: uint16(cfg.MaxStreamsPerConnection),
+			MaxThroughput:     true,
+		}
+
+		quicTransport, err := transport.NewTransport(transportCfg)
 		if err == nil {
-			stream, err := conn.OpenStream()
+			conn, err := quicTransport.Connect(host, port)
 			if err == nil {
-				log.Println("[peer] Connected via MsQuic")
-				reader = protocol.NewFrameReader(stream)
-				writer = protocol.NewFrameWriter(stream)
-				cleanup = func() {
-					stream.Close()
+				stream, err := conn.OpenStream()
+				if err == nil {
+					log.Println("[peer] Connected via MsQuic")
+					reader = protocol.NewFrameReader(stream)
+					writer = protocol.NewFrameWriter(stream)
+					cleanup = func() {
+						stream.Close()
+						conn.Close()
+						quicTransport.Close()
+					}
+					msquicOK = true
+				} else {
 					conn.Close()
 					quicTransport.Close()
 				}
-				msquicOK = true
 			} else {
-				conn.Close()
 				quicTransport.Close()
 			}
-		} else {
-			quicTransport.Close()
+		}
+		if !msquicOK {
+			log.Printf("[peer] MsQuic unavailable, trying TCP fallback to %s:%d", host, port)
 		}
 	}
-	if !msquicOK {
-		log.Printf("[peer] MsQuic unavailable, trying TCP fallback to %s:%d", host, port)
-	}
 
-	// --- Attempt 2: TCP fallback ---
-	if !msquicOK {
+	// --- Attempt 2: TCP fallback (skip if mode == "quic") ---
+	if !msquicOK && mode != "quic" {
 		tcpConn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 10*time.Second)
 		if err != nil {
 			return fmt.Errorf("connect to seed (TCP fallback): %w", err)
@@ -288,10 +349,87 @@ func downloadFile(
 	}
 
 	defer cleanup()
+	return runChunkProtocol(reader, writer, ml, outFile, cfg, stateMgr, existingState)
+}
 
+// downloadFileViaLibp2p connects to the seed by libp2p PeerID through the
+// relay's circuit-relay-v2 service, then runs the chunk protocol over the
+// libp2p stream. Used as a last resort when no direct address worked —
+// circuit relay traverses any NAT but routes data through the relay host.
+func downloadFileViaLibp2p(
+	h host.Host,
+	seed protocol.SeedInfo,
+	relayAddrStr string,
+	ml *magnetkLink.MagnetLink,
+	outFile string,
+	cfg *config.Config,
+	stateMgr *state.Manager,
+	existingState *types.TransferState,
+) error {
+	if relayAddrStr == "" {
+		return fmt.Errorf("no relay address for libp2p tunnel")
+	}
+	relayMA, err := multiaddr.NewMultiaddr(relayAddrStr)
+	if err != nil {
+		return fmt.Errorf("invalid relay multiaddr: %w", err)
+	}
+	relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
+	if err != nil {
+		return fmt.Errorf("parse relay peer info: %w", err)
+	}
+
+	connectCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := h.Connect(connectCtx, *relayInfo); err != nil {
+		return fmt.Errorf("connect to relay: %w", err)
+	}
+
+	seedID, err := peer.Decode(seed.PeerID)
+	if err != nil {
+		return fmt.Errorf("decode seed peer id: %w", err)
+	}
+
+	// Add a circuit-relay address for the seed: dialing this multiaddr
+	// makes libp2p route through the relay's circuit service to reach the
+	// seed even when the seed has no public address.
+	circuitAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit", relayInfo.ID))
+	if err != nil {
+		return fmt.Errorf("build circuit multiaddr: %w", err)
+	}
+	h.Peerstore().AddAddr(seedID, circuitAddr, peerstore.TempAddrTTL)
+
+	// Open the magnetk transfer stream. WithAllowLimitedConn lets libp2p
+	// use the relayed (resource-limited) connection for this stream.
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer streamCancel()
+	streamCtx = network.WithAllowLimitedConn(streamCtx, "magnetk")
+
+	stream, err := h.NewStream(streamCtx, seedID, libp2pProto.ID(protocol.MagnetProtocolID))
+	if err != nil {
+		return fmt.Errorf("open libp2p stream to seed: %w", err)
+	}
+	defer stream.Close()
+
+	log.Printf("[peer] Connected via libp2p circuit relay to seed %s", seed.PeerID[:12])
+	reader := protocol.NewFrameReader(stream)
+	writer := protocol.NewFrameWriter(stream)
+	return runChunkProtocol(reader, writer, ml, outFile, cfg, stateMgr, existingState)
+}
+
+// runChunkProtocol drives manifest + chunk requests over an already-open
+// connection. Used by both direct (MsQuic/TCP) and libp2p-tunnel paths.
+func runChunkProtocol(
+	reader *protocol.FrameReader,
+	writer *protocol.FrameWriter,
+	ml *magnetkLink.MagnetLink,
+	outFile string,
+	cfg *config.Config,
+	stateMgr *state.Manager,
+	existingState *types.TransferState,
+) error {
 	// ===== Request manifest =====
 	log.Println("[peer] Requesting manifest...")
-	err = writer.WriteJSON(protocol.MsgManifestReq, protocol.ManifestRequestPayload{
+	err := writer.WriteJSON(protocol.MsgManifestReq, protocol.ManifestRequestPayload{
 		FileHash: ml.FileHash,
 	})
 	if err != nil {
@@ -574,31 +712,68 @@ func discoverSeeds(h interface{}, dhtNode *magnetkDHT.DHT, relayAddrStr string, 
 	return nil, fmt.Errorf("no seeds found via any discovery method")
 }
 
-// lookupSeedsViaRelay connects to a relay and queries for seeds of a file.
-func lookupSeedsViaRelay(h interface{}, relayAddrStr string, fileHash string) ([]protocol.SeedInfo, error) {
-	host, ok := h.(interface {
-		Connect(ctx context.Context, pi peer.AddrInfo) error
-		NewStream(ctx context.Context, p peer.ID, pids ...interface{}) (interface{}, error)
-	})
-	_ = host
-	_ = ok
-
-	// Parse relay multiaddr
-	relayMA, err := multiaddr.NewMultiaddr(relayAddrStr)
+// lookupSeedsViaRelay connects to the relay's TCP discovery port (libp2p
+// port + 2 by convention, matching cmd/relay/main.go) and queries for
+// seeds of a file using the binary framing protocol — same path the JS
+// and Python SDKs use, so seeds published from any SDK are found here.
+func lookupSeedsViaRelay(_ interface{}, relayAddrStr string, fileHash string) ([]protocol.SeedInfo, error) {
+	relayHost, libp2pPort, err := splitRelayMultiaddr(relayAddrStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid relay address: %w", err)
+		return nil, err
+	}
+	discoveryPort := libp2pPort + 2
+
+	log.Printf("[peer] Looking up seeds for %s on %s:%d...", fileHash[:12], relayHost, discoveryPort)
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", relayHost, discoveryPort), 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial relay discovery: %w", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(15 * time.Second))
+
+	writer := protocol.NewFrameWriter(conn)
+	reader := protocol.NewFrameReader(conn)
+
+	if err := writer.WriteJSON(protocol.MsgLookupPeer, protocol.LookupPeerPayload{FileHash: fileHash}); err != nil {
+		return nil, fmt.Errorf("send lookup request: %w", err)
 	}
 
-	relayInfo, err := peer.AddrInfoFromP2pAddr(relayMA)
+	frame, err := reader.ReadFrame()
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse relay peer info: %w", err)
+		return nil, fmt.Errorf("read lookup response: %w", err)
+	}
+	if frame.Type == protocol.MsgError {
+		var ep protocol.ErrorPayload
+		json.Unmarshal(frame.Payload, &ep)
+		return nil, fmt.Errorf("relay error: %s", ep.Message)
+	}
+	if frame.Type != protocol.MsgLookupResult {
+		return nil, fmt.Errorf("unexpected response type 0x%02x", frame.Type)
 	}
 
-	log.Printf("[peer] Looking up seeds for %s via relay %s...", fileHash[:12], relayInfo.ID.String()[:12])
+	var result protocol.LookupResultPayload
+	if err := json.Unmarshal(frame.Payload, &result); err != nil {
+		return nil, fmt.Errorf("parse lookup result: %w", err)
+	}
+	if !result.Found {
+		return nil, nil
+	}
+	return result.Seeds, nil
+}
 
-	// TODO: Implement full relay lookup protocol stream
-	// For now, return empty to trigger fallback
-	return nil, fmt.Errorf("relay lookup not yet implemented")
+// splitRelayMultiaddr extracts host and libp2p TCP port from a multiaddr
+// like /ip4/HOST/tcp/PORT/p2p/PEERID.
+func splitRelayMultiaddr(addr string) (string, int, error) {
+	parts := strings.Split(addr, "/")
+	if len(parts) < 5 || parts[1] != "ip4" || parts[3] != "tcp" {
+		return "", 0, fmt.Errorf("unsupported relay multiaddr: %s", addr)
+	}
+	port, err := strconv.Atoi(parts[4])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid port in relay multiaddr: %w", err)
+	}
+	return parts[2], port, nil
 }
 
 func parseHostPort(addr string) (string, uint16) {
@@ -612,4 +787,22 @@ func parseHostPort(addr string) (string, uint16) {
 		}
 	}
 	return addr, 4002
+}
+
+// isRoutableAddr returns true if host is dialable from this machine.
+// Accepts LAN/RFC1918 ranges (peers on the same network reach each other
+// directly via LAN IP — no NAT involved). Rejects only the bind-all
+// sentinel, link-local, and loopback (which is added separately).
+func isRoutableAddr(host string) bool {
+	if host == "" || host == "0.0.0.0" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return false
+	}
+	return true
 }

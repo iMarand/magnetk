@@ -38,7 +38,7 @@ import (
 
 	"magnetk/pkg/chunk"
 	"magnetk/pkg/config"
-	magnetLink "magnetk/pkg/magnetk"
+	magnetkLink "magnetk/pkg/magnetk"
 	"magnetk/pkg/protocol"
 	"magnetk/pkg/state"
 	"magnetk/pkg/transport"
@@ -49,19 +49,23 @@ import (
 
 // SeedConfig configures a Seed node.
 type SeedConfig struct {
-	RelayAddr     string // Relay multiaddr (required)
-	BindAddress   string // Local bind address (default: "0.0.0.0")
-	TransportPort int    // MsQuic port for serving data (default: 4002)
-	ChunkSizeMB   int    // Chunk size in MB (default: 1)
-	ConfigPath    string // Path to settings.conf (empty = defaults)
+	RelayAddr         string   // Relay multiaddr (required unless DHT)
+	BindAddress       string   // Local bind address (default: "0.0.0.0")
+	TransportPort     int      // MsQuic port for serving data (default: 4002)
+	ChunkSizeMB       int      // Chunk size in MB (default: 1)
+	ConfigPath        string   // Path to settings.conf (empty = defaults)
+	DHTEnabled        bool     // Enable DHT discovery
+	DHTBootstrapPeers []string // Custom DHT bootstrap peer multiaddrs
 }
 
 // ClientConfig configures a Client.
 type ClientConfig struct {
-	BindAddress    string // Local bind address (default: "0.0.0.0")
-	OutputDir      string // Download output directory (default: ".")
-	MaxConnections int    // Max concurrent connections (default: 10)
-	ConfigPath     string // Path to settings.conf (empty = defaults)
+	BindAddress       string   // Local bind address (default: "0.0.0.0")
+	OutputDir         string   // Download output directory (default: ".")
+	MaxConnections    int      // Max concurrent connections (default: 10)
+	ConfigPath        string   // Path to settings.conf (empty = defaults)
+	DHTEnabled        bool     // Enable DHT discovery
+	DHTBootstrapPeers []string // Custom DHT bootstrap peer multiaddrs
 }
 
 // Progress reports download progress.
@@ -233,14 +237,14 @@ func (s *Seed) handleStream(stream *transport.Stream, conn *transport.Connection
 				FileHash:    sf.Manifest.FileHash,
 				FileName:    sf.Manifest.FileName,
 				FileSize:    sf.Manifest.FileSize,
-				ChunkSize:   sf.Manifest.ChunkSize,
+				ChunkSize:   int64(sf.Manifest.ChunkSize),
 				TotalChunks: sf.Manifest.TotalChunks,
 				Chunks:      make([]protocol.ChunkMeta, len(sf.Manifest.Chunks)),
 			}
 			for i, c := range sf.Manifest.Chunks {
 				resp.Chunks[i] = protocol.ChunkMeta{
 					Index: c.Index, Hash: c.Hash,
-					Offset: c.Offset, Size: c.Size,
+					Offset: c.Offset, Size: int64(c.Size),
 				}
 			}
 
@@ -260,11 +264,11 @@ func (s *Seed) handleStream(stream *transport.Stream, conn *transport.Connection
 			}
 
 			for _, idx := range req.ChunkIndices {
-				data, err := s.chunkMgr.ReadChunk(sf.FilePath, sf.Manifest, idx)
+				data, err := s.chunkMgr.ReadChunk(sf.FilePath, idx)
 				if err != nil {
 					continue
 				}
-				writer.WriteChunk(idx, data)
+				writer.WriteChunk(idx, data.Data)
 			}
 		}
 	}
@@ -313,7 +317,10 @@ func NewClient(clientCfg ClientConfig) (*Client, error) {
 		cfg.MaxConnections = clientCfg.MaxConnections
 	}
 
-	stateMgr := state.NewManager(cfg.StateDir)
+	stateMgr, err := state.NewManager(cfg.StateDir, cfg.StateExpiryDays)
+	if err != nil {
+		return nil, fmt.Errorf("init state manager: %w", err)
+	}
 
 	return &Client{
 		cfg:      cfg,

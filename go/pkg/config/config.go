@@ -3,6 +3,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -74,6 +75,7 @@ type Config struct {
 	RelayAssisted  string // "auto" | "true" | "false" — relay-assisted data transfer
 	HolePunch      bool   // Enable NAT hole punching (STUN + libp2p)
 	RelayTimeoutMs int    // How long to wait for direct before relay fallback
+	TransportMode  string // "auto" | "quic" | "tcp" — data transport mode
 }
 
 // DefaultConfig returns a Config with default values
@@ -119,6 +121,7 @@ func DefaultConfig() *Config {
 		RelayAssisted:  "auto",
 		HolePunch:      true,
 		RelayTimeoutMs: 5000,
+		TransportMode:  "auto",
 	}
 }
 
@@ -179,8 +182,9 @@ func LoadOrCreate(path string) (*Config, error) {
 		return cfg, nil
 	}
 
-	// If file doesn't exist, create it with defaults
-	if !os.IsNotExist(unwrapErr(err)) {
+	// If file doesn't exist, create it with defaults.
+	// errors.Is walks the wrap chain — handles fmt.Errorf("%w", ...) wrapping.
+	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err // Real error, not just missing file
 	}
 
@@ -201,25 +205,7 @@ func LoadOrCreate(path string) (*Config, error) {
 	return DefaultConfig(), nil
 }
 
-// unwrapErr extracts the innermost error for os.IsNotExist checks.
-func unwrapErr(err error) error {
-	for {
-		inner := fmt.Errorf("%w", err)
-		if inner == err {
-			break
-		}
-		err = inner
-	}
-	// Try to find os-level error in the chain
-	if os.IsNotExist(err) {
-		return err
-	}
-	// Check if the error message indicates file not found
-	if strings.Contains(err.Error(), "cannot find") || strings.Contains(err.Error(), "no such file") {
-		return os.ErrNotExist
-	}
-	return err
-}
+// (unwrapErr was removed — replaced with errors.Is at the call site)
 
 // DefaultConfigContent returns the full default settings.conf content with documentation.
 func DefaultConfigContent() string {
@@ -463,6 +449,13 @@ func (c *Config) set(key, value string) error {
 			return fmt.Errorf("invalid RELAY_TIMEOUT_MS: %w", err)
 		}
 		c.RelayTimeoutMs = v
+	case "TRANSPORT_MODE":
+		mode := strings.ToLower(value)
+		if mode == "auto" || mode == "quic" || mode == "tcp" {
+			c.TransportMode = mode
+		} else {
+			return fmt.Errorf("invalid TRANSPORT_MODE: %s (must be auto|quic|tcp)", value)
+		}
 	}
 	return nil
 }
