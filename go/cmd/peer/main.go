@@ -216,12 +216,6 @@ func main() {
 			log.Printf("[peer] Skipping non-routable seed address: %s", s.TransportAddr)
 		}
 	}
-	// Always add localhost as last resort (same-machine)
-	if len(seeds) > 0 {
-		localSeed := seeds[0]
-		localSeed.TransportAddr = fmt.Sprintf("127.0.0.1:%d", cfg.TransportPort)
-		routableSeeds = append(routableSeeds, localSeed)
-	}
 	log.Printf("[peer] Routable seeds to try: %d", len(routableSeeds))
 
 	// Set up download with cancel support
@@ -246,7 +240,7 @@ func main() {
 		// NATs without UPnP). Connect by libp2p PeerID through the relay's
 		// circuit-relay-v2 service. Slower than direct (data flows via the
 		// relay) but works across any NAT topology.
-		if relay == "" {
+		if relay == "" || cfg.RelayAssisted == "false" {
 			return
 		}
 		log.Println("[peer] Trying libp2p circuit-relay tunnel...")
@@ -392,7 +386,7 @@ func downloadFileViaLibp2p(
 	// Add a circuit-relay address for the seed: dialing this multiaddr
 	// makes libp2p route through the relay's circuit service to reach the
 	// seed even when the seed has no public address.
-	circuitAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/p2p/%s/p2p-circuit", relayInfo.ID))
+	circuitAddr, err := multiaddr.NewMultiaddr(fmt.Sprintf("%s/p2p-circuit", relayAddrStr))
 	if err != nil {
 		return fmt.Errorf("build circuit multiaddr: %w", err)
 	}

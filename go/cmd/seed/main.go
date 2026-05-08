@@ -27,6 +27,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	circuitv2client "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
@@ -283,6 +284,15 @@ func main() {
 			log.Fatalf("[seed] Failed to connect to relay: %v", err)
 		}
 		log.Println("[seed] Connected to relay")
+
+		reserveCtx, reserveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		reservation, err := circuitv2client.Reserve(reserveCtx, h, *relayInfo)
+		reserveCancel()
+		if err != nil {
+			log.Printf("[seed] Warning: circuit-relay reservation failed: %v", err)
+		} else {
+			log.Printf("[seed] Reserved circuit-relay slot until %s", reservation.Expiration.Format(time.RFC3339))
+		}
 
 		// Register with relay
 		err = publishToRelay(h, relayInfo.ID, manifest, *filePath, cfg, natMappings)

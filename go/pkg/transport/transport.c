@@ -25,6 +25,17 @@
 #include <string.h>
 #include <stdio.h>
 
+/* ===== Atomic refcount helpers ===== */
+#ifdef _WIN32
+#define MAGNETK_ATOMIC_DEC(p) InterlockedDecrement((volatile long*)(p))
+#define MAGNETK_ATOMIC_XCHG_PTR(target, val) \
+    ((HQUIC)InterlockedExchangePointer((PVOID volatile*)(target), (PVOID)(val)))
+#else
+#define MAGNETK_ATOMIC_DEC(p) __sync_sub_and_fetch((volatile long*)(p), 1)
+#define MAGNETK_ATOMIC_XCHG_PTR(target, val) \
+    __sync_lock_test_and_set((target), (val))
+#endif
+
 #ifdef _WIN32
 #include <wincrypt.h>
 #include <ncrypt.h>
@@ -136,6 +147,8 @@ struct magnetk_connection {
 struct magnetk_stream {
     magnetk_connection_t*        conn;
     HQUIC                       handle;
+    const QUIC_API_TABLE*       msquic_api;
+    volatile long               ref_count;
     magnetk_on_data_fn           on_data;
     magnetk_on_send_complete_fn  on_send_complete;
     magnetk_on_close_fn          on_close;
@@ -152,6 +165,10 @@ struct magnetk_stream {
     uint32_t                    recv_length;
     int                         recv_fin;
     volatile int                recv_pending;
+    uint8_t*                    recv_queue;
+    uint32_t                    recv_queue_len;
+    uint32_t                    recv_queue_cap;
+    int                         recv_closed;
     /* For sync send */
 #ifdef _WIN32
     HANDLE                      send_event;
@@ -167,6 +184,10 @@ static QUIC_STATUS QUIC_API listener_callback(HQUIC Listener, void* Context, QUI
 static QUIC_STATUS QUIC_API server_conn_callback(HQUIC Connection, void* Context, QUIC_CONNECTION_EVENT* Event);
 static QUIC_STATUS QUIC_API client_conn_callback(HQUIC Connection, void* Context, QUIC_CONNECTION_EVENT* Event);
 static QUIC_STATUS QUIC_API stream_callback(HQUIC Stream, void* Context, QUIC_STREAM_EVENT* Event);
+static void magnetk_stream_free_resources(magnetk_stream_t* stream);
+static void magnetk_stream_release(magnetk_stream_t* stream);
+static int magnetk_stream_append_recv_locked(magnetk_stream_t* stream, const QUIC_BUFFER* buffers, uint32_t count);
+static uint32_t magnetk_stream_drain_recv_locked(magnetk_stream_t* stream, uint8_t* buffer, uint32_t buffer_size);
 
 /* ===== Utility ===== */
 
@@ -785,30 +806,27 @@ static QUIC_STATUS QUIC_API stream_callback(
     case QUIC_STREAM_EVENT_RECEIVE: {
         int fin = (Event->RECEIVE.Flags & QUIC_RECEIVE_FLAG_FIN) ? 1 : 0;
 
-        /* Check if a sync recv is pending */
-        if (stream->recv_pending) {
-            /* Copy data to sync recv buffer */
-            uint32_t total = 0;
-            for (uint32_t i = 0; i < Event->RECEIVE.BufferCount; i++) {
-                uint32_t copy_len = Event->RECEIVE.Buffers[i].Length;
-                if (stream->recv_buffer && (total + copy_len <= stream->recv_length)) {
-                    memcpy(stream->recv_buffer + total, Event->RECEIVE.Buffers[i].Buffer, copy_len);
-                    total += copy_len;
-                }
-            }
-            stream->recv_length = total;
-            stream->recv_fin = fin;
-            stream->recv_pending = 0;
-
 #ifdef _WIN32
-            SetEvent(stream->recv_event);
+        EnterCriticalSection(&stream->recv_lock);
+        if (!magnetk_stream_append_recv_locked(stream, Event->RECEIVE.Buffers, Event->RECEIVE.BufferCount)) {
+            stream->recv_closed = 1;
+        }
+        if (fin) stream->recv_closed = 1;
+        stream->recv_pending = 0;
+        LeaveCriticalSection(&stream->recv_lock);
+        SetEvent(stream->recv_event);
 #else
-            pthread_mutex_lock(&stream->recv_mutex);
-            pthread_cond_signal(&stream->recv_cond);
-            pthread_mutex_unlock(&stream->recv_mutex);
+        pthread_mutex_lock(&stream->recv_mutex);
+        if (!magnetk_stream_append_recv_locked(stream, Event->RECEIVE.Buffers, Event->RECEIVE.BufferCount)) {
+            stream->recv_closed = 1;
+        }
+        if (fin) stream->recv_closed = 1;
+        stream->recv_pending = 0;
+        pthread_cond_signal(&stream->recv_cond);
+        pthread_mutex_unlock(&stream->recv_mutex);
 #endif
-        } else if (stream->on_data) {
-            /* Forward to async callback */
+
+        if (stream->on_data) {
             for (uint32_t i = 0; i < Event->RECEIVE.BufferCount; i++) {
                 int is_last = (i == Event->RECEIVE.BufferCount - 1) ? fin : 0;
                 stream->on_data(stream,
@@ -849,37 +867,30 @@ static QUIC_STATUS QUIC_API stream_callback(
 
     case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
-        /* Signal pending recv with fin */
-        if (stream->recv_pending) {
-            stream->recv_length = 0;
-            stream->recv_fin = 1;
-            stream->recv_pending = 0;
 #ifdef _WIN32
-            SetEvent(stream->recv_event);
+        EnterCriticalSection(&stream->recv_lock);
+        stream->recv_closed = 1;
+        stream->recv_pending = 0;
+        LeaveCriticalSection(&stream->recv_lock);
+        SetEvent(stream->recv_event);
 #else
-            pthread_mutex_lock(&stream->recv_mutex);
-            pthread_cond_signal(&stream->recv_cond);
-            pthread_mutex_unlock(&stream->recv_mutex);
+        pthread_mutex_lock(&stream->recv_mutex);
+        stream->recv_closed = 1;
+        stream->recv_pending = 0;
+        pthread_cond_signal(&stream->recv_cond);
+        pthread_mutex_unlock(&stream->recv_mutex);
 #endif
-        }
         return QUIC_STATUS_SUCCESS;
 
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         if (stream->on_close) {
             stream->on_close(stream, MAGNETK_ERR_CLOSED, stream->user_data);
         }
-#ifdef _WIN32
-        if (stream->recv_event) CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        if (stream->send_event) CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
-        stream->conn->transport->msquic->StreamClose(Stream);
-        free(stream);
+        MAGNETK_ATOMIC_XCHG_PTR(&stream->handle, NULL);
+        if (stream->msquic_api) {
+            stream->msquic_api->StreamClose(Stream);
+        }
+        magnetk_stream_release(stream);
         return QUIC_STATUS_SUCCESS;
 
     default:
@@ -904,6 +915,8 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
     if (!stream) return MAGNETK_ERR_MEMORY;
 
     stream->conn = conn;
+    stream->msquic_api = conn->transport->msquic;
+    stream->ref_count = 2;
     stream->on_data = on_data;
     stream->on_send_complete = on_send_complete;
     stream->on_close = on_close;
@@ -927,16 +940,7 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
         stream,
         &stream->handle);
     if (QUIC_FAILED(status)) {
-#ifdef _WIN32
-        CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
+        magnetk_stream_free_resources(stream);
         free(stream);
         return MAGNETK_ERR_STREAM;
     }
@@ -946,16 +950,7 @@ MAGNETK_API magnetk_status_t magnetk_stream_open(
         QUIC_STREAM_START_FLAG_NONE);
     if (QUIC_FAILED(status)) {
         conn->transport->msquic->StreamClose(stream->handle);
-#ifdef _WIN32
-        CloseHandle(stream->recv_event);
-        DeleteCriticalSection(&stream->recv_lock);
-        CloseHandle(stream->send_event);
-#else
-        pthread_mutex_destroy(&stream->recv_mutex);
-        pthread_cond_destroy(&stream->recv_cond);
-        pthread_mutex_destroy(&stream->send_mutex);
-        pthread_cond_destroy(&stream->send_cond);
-#endif
+        magnetk_stream_free_resources(stream);
         free(stream);
         return MAGNETK_ERR_STREAM;
     }
@@ -1043,15 +1038,95 @@ MAGNETK_API magnetk_status_t magnetk_stream_shutdown_send(magnetk_stream_t* stre
     return QUIC_FAILED(status) ? MAGNETK_ERR_STREAM : MAGNETK_OK;
 }
 
+static void magnetk_stream_free_resources(magnetk_stream_t* stream) {
+    if (!stream) return;
+    if (stream->recv_queue) { free(stream->recv_queue); stream->recv_queue = NULL; }
+#ifdef _WIN32
+    if (stream->recv_event) { CloseHandle(stream->recv_event); stream->recv_event = NULL; }
+    DeleteCriticalSection(&stream->recv_lock);
+    if (stream->send_event) { CloseHandle(stream->send_event); stream->send_event = NULL; }
+#else
+    pthread_mutex_destroy(&stream->recv_mutex);
+    pthread_cond_destroy(&stream->recv_cond);
+    pthread_mutex_destroy(&stream->send_mutex);
+    pthread_cond_destroy(&stream->send_cond);
+#endif
+}
+
+static void magnetk_stream_release(magnetk_stream_t* stream) {
+    if (!stream) return;
+    if (MAGNETK_ATOMIC_DEC(&stream->ref_count) == 0) {
+        magnetk_stream_free_resources(stream);
+        free(stream);
+    }
+}
+
+static int magnetk_stream_append_recv_locked(magnetk_stream_t* stream, const QUIC_BUFFER* buffers, uint32_t count) {
+    uint32_t add = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (buffers[i].Length > 0xFFFFFFFFu - add) {
+            return 0;
+        }
+        add += buffers[i].Length;
+    }
+    if (add == 0) {
+        return 1;
+    }
+    if (add > 0xFFFFFFFFu - stream->recv_queue_len) {
+        return 0;
+    }
+
+    uint32_t needed = stream->recv_queue_len + add;
+    if (needed > stream->recv_queue_cap) {
+        uint32_t cap = stream->recv_queue_cap ? stream->recv_queue_cap : 4096;
+        while (cap < needed) {
+            if (cap > 0x7FFFFFFFu) {
+                cap = needed;
+                break;
+            }
+            cap *= 2;
+        }
+        uint8_t* next = (uint8_t*)realloc(stream->recv_queue, cap);
+        if (!next) {
+            return 0;
+        }
+        stream->recv_queue = next;
+        stream->recv_queue_cap = cap;
+    }
+
+    uint32_t offset = stream->recv_queue_len;
+    for (uint32_t i = 0; i < count; i++) {
+        if (buffers[i].Length == 0) {
+            continue;
+        }
+        memcpy(stream->recv_queue + offset, buffers[i].Buffer, buffers[i].Length);
+        offset += buffers[i].Length;
+    }
+    stream->recv_queue_len = needed;
+    return 1;
+}
+
+static uint32_t magnetk_stream_drain_recv_locked(magnetk_stream_t* stream, uint8_t* buffer, uint32_t buffer_size) {
+    uint32_t n = stream->recv_queue_len < buffer_size ? stream->recv_queue_len : buffer_size;
+    if (n == 0) {
+        return 0;
+    }
+    memcpy(buffer, stream->recv_queue, n);
+    stream->recv_queue_len -= n;
+    if (stream->recv_queue_len > 0) {
+        memmove(stream->recv_queue, stream->recv_queue + n, stream->recv_queue_len);
+    }
+    return n;
+}
+
 MAGNETK_API void magnetk_stream_close(magnetk_stream_t* stream) {
     if (!stream) return;
-    if (stream->handle) {
-        stream->conn->transport->msquic->StreamShutdown(
-            stream->handle,
-            QUIC_STREAM_SHUTDOWN_FLAG_ABORT,
-            0);
+    HQUIC handle = MAGNETK_ATOMIC_XCHG_PTR(&stream->handle, NULL);
+    const QUIC_API_TABLE* api = stream->msquic_api;
+    if (handle && api) {
+        api->StreamShutdown(handle, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
     }
-    /* Stream will be freed in shutdown complete callback */
+    magnetk_stream_release(stream);
 }
 
 MAGNETK_API void magnetk_stream_set_userdata(magnetk_stream_t* stream, void* user_data) {
@@ -1104,16 +1179,34 @@ MAGNETK_API magnetk_status_t magnetk_stream_recv_sync(
 {
     if (!stream || !buffer || !out_length) return MAGNETK_ERR_INVALID_PARAM;
 
-    stream->recv_buffer = buffer;
-    stream->recv_length = buffer_size;
-    stream->recv_fin = 0;
-    stream->recv_pending = 1;
-
 #ifdef _WIN32
-    DWORD wait_result = WaitForSingleObject(stream->recv_event, timeout_ms);
-    if (wait_result == WAIT_TIMEOUT) {
-        stream->recv_pending = 0;
-        return MAGNETK_ERR_TIMEOUT;
+    DWORD deadline = GetTickCount() + timeout_ms;
+    for (;;) {
+        EnterCriticalSection(&stream->recv_lock);
+        if (stream->recv_queue_len > 0) {
+            *out_length = magnetk_stream_drain_recv_locked(stream, buffer, buffer_size);
+            if (out_fin) *out_fin = 0;
+            LeaveCriticalSection(&stream->recv_lock);
+            return MAGNETK_OK;
+        }
+        if (stream->recv_closed) {
+            *out_length = 0;
+            if (out_fin) *out_fin = 1;
+            LeaveCriticalSection(&stream->recv_lock);
+            return MAGNETK_ERR_CLOSED;
+        }
+        stream->recv_pending = 1;
+        LeaveCriticalSection(&stream->recv_lock);
+
+        DWORD now = GetTickCount();
+        DWORD remaining = (now >= deadline) ? 0 : (deadline - now);
+        DWORD wait_result = WaitForSingleObject(stream->recv_event, remaining);
+        if (wait_result == WAIT_TIMEOUT) {
+            EnterCriticalSection(&stream->recv_lock);
+            stream->recv_pending = 0;
+            LeaveCriticalSection(&stream->recv_lock);
+            return MAGNETK_ERR_TIMEOUT;
+        }
     }
 #else
     struct timespec ts;
@@ -1123,24 +1216,29 @@ MAGNETK_API magnetk_status_t magnetk_stream_recv_sync(
     if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
 
     pthread_mutex_lock(&stream->recv_mutex);
-    while (stream->recv_pending) {
+    while (stream->recv_queue_len == 0 && !stream->recv_closed) {
+        stream->recv_pending = 1;
         if (pthread_cond_timedwait(&stream->recv_cond, &stream->recv_mutex, &ts) != 0) {
             stream->recv_pending = 0;
             pthread_mutex_unlock(&stream->recv_mutex);
             return MAGNETK_ERR_TIMEOUT;
         }
     }
+    stream->recv_pending = 0;
+    if (stream->recv_queue_len > 0) {
+        *out_length = magnetk_stream_drain_recv_locked(stream, buffer, buffer_size);
+        if (out_fin) *out_fin = 0;
+        pthread_mutex_unlock(&stream->recv_mutex);
+        return MAGNETK_OK;
+    }
+    if (stream->recv_closed) {
+        *out_length = 0;
+        if (out_fin) *out_fin = 1;
+        pthread_mutex_unlock(&stream->recv_mutex);
+        return MAGNETK_ERR_CLOSED;
+    }
     pthread_mutex_unlock(&stream->recv_mutex);
 #endif
 
-    *out_length = stream->recv_length;
-    if (out_fin) *out_fin = stream->recv_fin;
-
-    stream->recv_buffer = NULL;
-
-    if (stream->recv_length == 0 && stream->recv_fin) {
-        return MAGNETK_ERR_CLOSED;
-    }
-
-    return MAGNETK_OK;
+    return MAGNETK_ERR_TIMEOUT;
 }
