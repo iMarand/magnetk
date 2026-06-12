@@ -227,8 +227,8 @@ $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
 | 📋 Phase 8 | Mobile SDKs, browser SDK, IoT client, enterprise QoS |
 | 📋 Phase 9 | On-chain governance, reputation system, cross-chain payments |
 
-Full architecture: [MagnetkCore.md](./MagnetkCore.md)
-Full development roadmap: [step.md](./step.md)
+Full architecture: [MagnetkCore.md](./docs/MAGNETK_CORE.md)
+Full development roadmap: [Roadmap.md](./docs/ROADMAP.md)
 
 ---
 
