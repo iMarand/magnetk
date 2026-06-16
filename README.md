@@ -1,5 +1,7 @@
 # Magnetk
 
+<img src="./Magnetk_logo.png">
+
 **Decentralized communication middleware. Fast, payment-native, AI-native.**
 
 Magnetk (Magnetic Network) is a peer-to-peer communication layer built on QUIC transport, distributed peer discovery, and blockchain-native payments. It moves files, messages, streams, model weights, and compute instructions between machines — with no central server, no CDN, and no broker in the middle.
@@ -20,7 +22,7 @@ Magnetk inverts this. More users means more seeders, which means faster speeds a
 
 ---
 
-## What Magnetk Does
+## What Magnetk Does Or Will Solve
 
 ### File and Data Transfer
 Large files — games, datasets, model weights — are downloaded in parallel from multiple peers simultaneously over QUIC. Every downloader automatically becomes a seeder. Speed increases as more people join, not decreases.
@@ -44,6 +46,8 @@ Agents discover each other through DHT by capability. They communicate directly,
 Smart contracts handle everything automatically. Seeders earn per chunk delivered. Relay operators earn per assisted connection. GPU nodes earn per inference unit. The developer earns a protocol fee on every transaction. No invoices, no manual work, no payment processor beyond the initial fiat on-ramp.
 
 Users pay with VISA or crypto. Crypto conversion happens invisibly in the background.
+
+**Consider all those as upcoming not fully yet implemented**
 
 ---
 
@@ -244,14 +248,11 @@ Full development roadmap: [Roadmap.md](./docs/ROADMAP.md)
 
 ## Contributing
 
-Contributions welcome. Open an issue before starting large changes so we can discuss approach first.
+Contributions welcome. Open an issue before starting large changes so we can discuss approach first. any suggestion I am open to talk about and feedback
 
----
+## Contacts
 
-## License
+If you want to get in contact with me please text me on
+ - Email: imarand@proton.me
+ - Linkedin: https://www.linkedin.com/in/imarand
 
-MIT
-
----
-
-*Magnetk — The network that gets faster as it gets bigger.*

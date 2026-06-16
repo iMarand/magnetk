@@ -212,3 +212,7 @@ Configurable via `DISCOVERY_PRIORITY` in `settings.conf`:
 | **Integrity** | SHA-256 per chunk + file |
 | **Routing** | All traffic via trusted relays |
 | **Access** | Optional API keys for seeds |
+
+
+
+**I Forgot to add in ICE framework**
