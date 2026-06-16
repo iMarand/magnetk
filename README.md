@@ -103,36 +103,8 @@ Magnetk is the only system that combines all four: **QUIC transport + DHT routin
 | React Native / Flutter | — | Roadmap |
 | Browser (WebRTC) | WebRTC | Roadmap |
 
-### Go
-```go
-import "github.com/iMarand/magnetk/sdk/go/magnetk"
-
-cfg := magnetk.DefaultConfig()
-client, err := magnetk.NewClient(cfg)
-
-err = client.Download("magnetk:?xt=urn:sha256:...", "./output.file")
-```
-
-### JavaScript
-```javascript
-import { MagnetkClient } from './client.js';
-
-const client = new MagnetkClient();
-await client.download('magnetk:?xt=urn:sha256:...', './downloads');
-```
-
-### C++
-```cpp
-#include "magnetk.hpp"
-
-magnetk::Client client;
-client.download("magnetk:?xt=...", "./out.dat");
-```
-
----
 
 ## Installation
-
 ### Prerequisites
 - Go v1.20+
 - GCC — Windows: MinGW-w64 · Linux: build-essential · macOS: Xcode Command Line Tools
@@ -159,6 +131,8 @@ $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
 ```
 
 ---
+
+<img src="./Magnetk_arich.png">
 
 ## Architecture
 
