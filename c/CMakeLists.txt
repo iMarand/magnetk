@@ -14,15 +14,18 @@ set(MSQUIC_INCLUDE_DIR "${MSQUIC_ROOT}/src/inc")
 
 # Platform-specific lib path
 if(WIN32)
-    set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/windows/x64_Debug_schannel")
+    set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/windows/x64_Release_schannel")
+    if(NOT EXISTS "${MSQUIC_LIB_DIR}/msquic.lib")
+        set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/windows/x64_Debug_schannel")
+    endif()
     set(MSQUIC_LIB "${MSQUIC_LIB_DIR}/msquic.lib")
 elseif(APPLE)
-    set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/macos/x64_Debug_openssl")
+    set(MSQUIC_LIB_DIR "${MSQUIC_ROOT}/artifacts/bin/macos/x64_Release_openssl")
     set(MSQUIC_LIB "${MSQUIC_LIB_DIR}/libmsquic.dylib")
 else()
     # Linux: Check multiple possible locations
     # 1. Artifacts (CI/Official Build)
-    set(PATH_ARTIFACTS "${MSQUIC_ROOT}/artifacts/bin/linux/x64_Debug_openssl/libmsquic.so")
+    set(PATH_ARTIFACTS "${MSQUIC_ROOT}/artifacts/bin/linux/x64_Release_openssl/libmsquic.so")
     # 2. Local Build (Release)
     set(PATH_BUILD_REL "${MSQUIC_ROOT}/build/bin/Release/libmsquic.so")
     # 3. Local Build (Debug)
@@ -89,6 +92,13 @@ endif()
 set_target_properties(magnetk_transport_shared PROPERTIES
     OUTPUT_NAME magnetk_transport
 )
+
+# ===== Self-test (loopback throughput / correctness) =====
+add_executable(transport_test test/transport_test.c)
+target_link_libraries(transport_test PRIVATE magnetk_transport)
+if(NOT WIN32)
+    target_link_libraries(transport_test PRIVATE pthread)
+endif()
 
 # ===== Copy MsQuic DLL to output =====
 if(WIN32)

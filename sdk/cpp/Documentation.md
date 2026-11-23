@@ -1,206 +1,127 @@
-# Magnetk C++ SDK Documentation
+# Magnetk C++ SDK
 
-The C++ SDK is a lightweight wrapper around the native Go `seed` and `peer` binaries, with C++ link parsing and progress callbacks. It is useful when a C++ application wants to launch Magnetk transfers without reimplementing the full relay/libp2p/MsQuic stack.
-
-Current behavior:
-
-- `Seed` starts a native `seed` process and keeps it alive.
-- `Client` starts a native `peer` process and parses progress logs.
-- Magnet links are parsed and generated in C++.
-- CMake builds the SDK, test, and examples.
-
-For fully embedded native transfer without spawning binaries, more C transport work would be needed. Today, the wrapper path is the supported path.
+A header-only C++17 SDK (`include/magnetk.hpp`) for messaging, pub/sub,
+request/reply, byte pipes and verified multi-source file transfer. It wraps
+the C ABI of `libmagnetk` (the same engine as the Go and Python SDKs and
+the `magnetk` CLI) and **loads it at run time**, so you link nothing except
+the platform loader and threads.
 
 ## Build
 
-```powershell
-cmake -S sdk\cpp -B sdk\cpp\build-magnetk
-cmake --build sdk\cpp\build-magnetk
-sdk\cpp\build-magnetk\Debug\test_sdk.exe
+```bash
+scripts/build.sh                      # or scripts\build.bat: builds build/lib/libmagnetk.*
+cmake -S sdk/cpp -B sdk/cpp/build
+cmake --build sdk/cpp/build --config Release
+sdk/cpp/build/bin/test_sdk            # 19 integration checks
 ```
 
-CMake builds:
+Works with MSVC 2019+, MinGW-w64 GCC and Clang/GCC on Linux and macOS.
+CMake copies `libmagnetk` and `msquic` from `MAGNETK_LIB_DIR` (default
+`<repo>/build/lib`) next to the executables in `build/bin` (plus the MinGW
+runtime DLLs). At run time the library is found via `MAGNETK_LIB` (full
+path), the executable's directory, then the system search path.
 
-- `magnetk_cpp.lib`
-- `test_sdk.exe`
-- `cpp_share.exe`
-- `cpp_download.exe`
+In your own CMake project:
 
-On Windows, CMake copies `magnetk_transport.dll` and `msquic.dll` beside the executables.
-
-## Requirements
-
-`Seed` and `Client` expect the native binaries to be available:
-
-- `seed` or `seed.exe`
-- `peer` or `peer.exe`
-
-Either put them in `PATH`, or pass explicit paths:
-
-```cpp
-magnetk::Seed::Config cfg;
-cfg.seed_path = "D:\\More_Projects\\Projects\\Magnetk\\bin\\seed.exe";
-
-magnetk::Client::Config ccfg;
-ccfg.peer_path = "D:\\More_Projects\\Projects\\Magnetk\\bin\\peer.exe";
+```cmake
+add_subdirectory(path/to/magnetk/sdk/cpp)
+target_link_libraries(myapp PRIVATE magnetk)   # include dirs + dl/threads
 ```
 
-## Share A File
+## Quick start
 
 ```cpp
-#include "magnetk.hpp"
+#include <magnetk.hpp>
 #include <iostream>
 
 int main() {
-    magnetk::Seed::Config cfg;
-    cfg.relay_addr = "69.169.109.243:4003";
-    cfg.port = 4002;
-    cfg.hole_punch = true;
-    cfg.relay_assisted = "auto";
-    cfg.transport_mode = "auto";
-    cfg.seed_path = "seed";
+    magnetk::Relay relay;                       // embedded, 127.0.0.1:<random>
+    magnetk::NodeOptions o;
+    o.relays = {relay.address()};               // or {"vps1:4002", "vps2:4002"}
 
-    magnetk::Seed seed(cfg);
-    std::string link = seed.publish("D:\\MUSIC\\el.mp4");
+    o.id = "bob";   magnetk::Node bob(o);
+    o.id = "alice"; magnetk::Node alice(o);
 
-    std::cout << link << std::endl;
-    std::cin.get();
-}
-```
-
-Example:
-
-```powershell
-sdk\cpp\build-magnetk\Debug\cpp_share.exe D:\MUSIC\el.mp4
-```
-
-The `Seed` destructor stops the spawned seed process.
-
-## Download A File
-
-```cpp
-#include "magnetk.hpp"
-#include <iostream>
-
-int main() {
-    magnetk::Client::Config cfg;
-    cfg.relay_assisted = "auto";
-    cfg.hole_punch = true;
-    cfg.transport_mode = "auto";
-    cfg.peer_path = "peer";
-
-    magnetk::Client client(cfg);
-    client.download("magnetk:?...", "./downloads/", [](const magnetk::Progress& p) {
-        std::cout << "\r" << p.percent << "% "
-                  << p.done_chunks << "/" << p.total_chunks
-                  << " chunks " << p.speed_mbps << " MB/s" << std::flush;
+    bob.subscribe("chat.>");
+    bob.serve("svc.upper");
+    bob.on_message([](const magnetk::Message& m) -> std::optional<std::string> {
+        if (m.is_request()) { std::string s = m.data; for (auto& c : s) c = toupper(c); return s; }
+        std::cout << m.from << " on " << m.subject << ": " << m.data << "\n";
+        return std::nullopt;
     });
+
+    alice.publish("chat.general", "hello");
+    std::cout << alice.request_topic("svc.upper", "loud") << "\n";   // LOUD
 }
 ```
 
-Example:
+## API
 
-```powershell
-sdk\cpp\build-magnetk\Debug\cpp_download.exe "magnetk:?..." .\downloads\
+### `NodeOptions`
+
+`relays`, `id`, `token`, `meta`, `transport` (`auto|quic|tcp`), `route`
+(`auto|direct|relay`), `listen` (accept peer-to-peer), `listen_addr`,
+`advertise`, `upnp`, `watch_presence`, `verify_peer`,
+`request_timeout_ms`, `connect_timeout_ms`, `inbox_size`, `sub_buffer`,
+`slow_consumer_wait_ms`, `chunk_size`, `streams_per_source`, `cache_dir`,
+`link_relays`, `congestion` (`cubic` default, `bbr`), `log`.
+
+### `Node`
+
+| Call | Description |
+|---|---|
+| `Node(opts)` | connects (throws on failure); fails over between relays and reconnects automatically |
+| `id()`, `info_json()`, `ping_us()`, `nodes_json(prefix)`, `relay_stats_json()` | identity and health |
+| `send(to, data, flags, timeout_ms)` | direct message; flags `magnetk::Receipt`, `Store`, `Unreliable` |
+| `publish(topic, data, unreliable)` | to every subscriber (`a.b`, `a.*`, `a.>` patterns) |
+| `subscribe(pattern, queue="")`, `unsubscribe(pattern)` | `queue` = load-balanced group |
+| `serve(topic)` | receive requests sent to `topic` (load-balanced over servers) |
+| `request(to, data)`, `request_topic(topic, data)` | returns the reply; throws `RemoteError`, `TimeoutError`, `NoRouteError` |
+| `receive(timeout_ms)` → `std::optional<Message>` | pull model |
+| `on_message(handler)` | push model on a dispatcher thread; for requests return the reply (`std::nullopt` = no reply); `on_message(nullptr)` stops it |
+| `respond(msg, data, is_error)` | answer a request explicitly |
+| `watch_presence(on)` | join/leave events arrive as `Kind::Presence` |
+| `open_pipe(to, service, meta, route)` → `Pipe` | reliable byte stream, peer-to-peer when possible |
+| `accept_pipe(timeout_ms)` → `std::optional<Pipe>` | incoming pipes |
+| `share(path)` → `SharedFile{hash,name,size,link,...}` | serve a file; `link` can be given to anyone |
+| `unshare(hash)`, `providers_json(hash)` | |
+| `download(link, out, progress_cb, route, seed)` → `DownloadResult` | multi-source, verified, resumable |
+| `close()` | also done by the destructor |
+
+`Message`: `kind`, `id`, `from`, `subject`, `data` (binary-safe
+`std::string`), `datagram`, `request`, `is_request()`.
+
+### `Pipe`
+
+Move-only, closes on destruction. `read(buf, len, timeout_ms)` (0 = EOF),
+`read_all()`, `write(data)`, `close_write()` (EOF to the peer), `close()`;
+fields `peer`, `service`, `meta`, `direct` (true = peer-to-peer).
+
+### `Relay`
+
+`Relay(RelayOptions{listen, id, tokens, peers, cluster_secret, transport,
+log})`, `address()`, `port()`, `stats_json()`, `close()`. For production
+use `magnetk relay` as a service ([RELAY_DEPLOYMENT.md](../../docs/RELAY_DEPLOYMENT.md)).
+
+### Errors
+
+Everything throws `magnetk::Error` subclasses with `code()`:
+`TimeoutError`, `ClosedError`, `NoRouteError`, `UnauthorizedError`,
+`NotConnectedError`, `RemoteError`, `RejectedError`, `NoProvidersError`,
+`InvalidError`, `DroppedError`.
+
+## Examples
+
+`examples/chat.cpp`, `rpc.cpp` (server/client), `share.cpp`,
+`download.cpp` — built into `build/bin`.
+
+```bash
+build/bin/rpc server 127.0.0.1:4002 &   # run several: load-balanced
+build/bin/rpc client 127.0.0.1:4002
 ```
 
-## Config Types
+## Threads and resources
 
-### `Seed::Config`
-
-```cpp
-struct Config {
-    std::string bind_address;
-    uint16_t    port = 4002;
-    std::string cert_file;
-    std::string key_file;
-    std::string relay_addr = "69.169.109.243:4003";
-    std::string relay_assisted = "auto";
-    std::string transport_mode = "auto";
-    bool        hole_punch = true;
-    bool        dht_enabled = false;
-    std::string seed_path = "seed";
-    std::string config_path;
-};
-```
-
-### `Client::Config`
-
-```cpp
-struct Config {
-    std::string bind_address;
-    uint16_t    max_conns = 10;
-    bool        no_cert_validation = true;
-    std::string transport_mode = "auto";
-    std::string relay_assisted = "auto";
-    bool        hole_punch = true;
-    std::string peer_path = "peer";
-    std::string config_path;
-};
-```
-
-## Progress
-
-```cpp
-struct Progress {
-    std::string file_name;
-    int64_t     file_size;
-    int64_t     downloaded;
-    uint32_t    total_chunks;
-    uint32_t    done_chunks;
-    double      percent;
-    double      speed_mbps;
-};
-```
-
-The SDK parses the native `peer` output. It reports both completed chunk progress and in-progress chunk receiving lines when available.
-
-## Magnet Links
-
-```cpp
-auto ml = magnetk::MagnetLink::parse("magnetk:?...");
-
-std::cout << ml.file_hash << std::endl;
-std::cout << ml.file_name << std::endl;
-std::cout << ml.file_size << std::endl;
-std::cout << ml.seed_id << std::endl;
-std::cout << ml.relay_addr << std::endl;
-
-std::string uri = ml.to_string();
-```
-
-The C++ parser URL-decodes `relay=` and `dn=`, and `to_string()` URL-encodes them again.
-
-## Relay-Assisted Modes
-
-- `"auto"`: native peer tries direct paths, then relay fallback.
-- `"true"`: relay-assisted transfer is allowed.
-- `"false"`: direct P2P only; fail if direct cannot be established.
-
-On mobile hotspots or carrier NAT, direct P2P often fails, so `"auto"` is usually the practical setting.
-
-## Method Reference
-
-### `Seed seed(config)`
-
-Constructs a wrapper. No process starts until `publish()`.
-
-### `seed.publish(file_path)`
-
-Starts native `seed`, waits for `Magnetk Link:`, returns the link, and keeps the process alive.
-
-### `Client client(config)`
-
-Constructs a download wrapper.
-
-### `client.download(magnet_uri, output_path, callback)`
-
-Runs native `peer`, streams output, calls the progress callback, and throws if `peer` exits with a non-zero status.
-
-## Verify
-
-```powershell
-cmake -S sdk\cpp -B sdk\cpp\build-magnetk
-cmake --build sdk\cpp\build-magnetk
-sdk\cpp\build-magnetk\Debug\test_sdk.exe
-```
+All `Node` methods are thread-safe. The engine runs on Go's scheduler
+inside libmagnetk; limit it with `MAGNETK_MAX_PROCS` (CPU cores) and
+`MAGNETK_MEMORY_LIMIT_MB` (soft heap limit) in the environment.

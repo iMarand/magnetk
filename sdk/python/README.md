@@ -1,75 +1,37 @@
-# Magnetk Python SDK
+# Magnetk for Python
 
-Magnetk is a high-performance peer-to-peer file transfer system. This SDK lets you **share** and **download** files over a decentralized network using Python.
-
-## Installation
-
-```bash
-pip install magnetk
-```
-
-## Prerequisites
-
-You need the Magnetk Go binaries (`seed` and `peer`) available in your system PATH or pointed to via environment variables / config.
-
-Build them from [the Magnetk repository](https://github.com/iMarand/magnetk):
-
-```bash
-./scripts/build_transport.sh   # Build C transport layer
-./scripts/build.sh             # Build Go binaries (seed, peer, relay)
-```
-
-## Quick Start
-
-### Share a File
+Fast messaging, pub/sub, request/reply, byte pipes and verified
+multi-source file transfer over QUIC (TCP fallback), through one or more
+relays and peer-to-peer whenever peers can reach each other.
 
 ```python
-from magnetk import MagnetkClient
+import magnetk
 
-client = MagnetkClient({
-    'relay_url': '69.169.109.243:4003',
-    'dht_enabled': True
-})
+node = magnetk.Node("relay.example.com:4002", id="alice")
 
-link = client.share("./my-file.zip")
-print(f"Magnetk Link: {link}")
+node.subscribe("chat.>", lambda m: print(m.sender, m.text))
+node.publish("chat.general", "hello")
+
+node.serve("svc.echo", lambda m: m.data)          # request handler
+print(node.request_topic("svc.echo", "ping"))
+
+shared = node.share("big.iso")                     # serve a file
+print(shared.link)                                 # give this to anyone
+# elsewhere: magnetk.Node(...).download(link, "downloads/")
 ```
 
-### Download a File
+* Native engine (`libmagnetk`) via ctypes — no subprocesses, no compiler.
+* Failover between relays, automatic reconnect, presence, offline storage,
+  delivery receipts, unreliable datagrams, queue groups.
+* Downloads from many providers in parallel; every chunk verified;
+  interrupted downloads resume.
 
-```python
-from magnetk import MagnetkClient
+Install from the repository after building the native library:
 
-client = MagnetkClient({
-    'dht_enabled': True
-})
-
-client.get("magnetk:?xt=urn:sha256:...", "./downloads/")
+```bash
+scripts/build.sh            # Windows: scripts\build.bat
+pip install ./sdk/python
 ```
 
-## Configuration
-
-All configuration is done via constructor options or `settings.conf`:
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `relay_url` | str | `69.169.109.243:4003` | Primary relay address |
-| `relays` | list | `[]` | Fallback relays for redundancy |
-| `dht_enabled` | bool | `False` | Enable DHT discovery |
-| `dht_bootstrap_peers` | list | `[]` | Custom DHT bootstrap nodes |
-| `seed_port` | int | `4002` | Port for seeding (QUIC) |
-| `config_path` | str | auto | Path to `settings.conf` |
-| `seeder_path` | str | auto | Path to `seed` binary |
-| `peer_path` | str | auto | Path to `peer` binary |
-| `auto_config` | bool | `True` | Auto-create `settings.conf` |
-
-## Protocol Overview
-
-| Job | Protocol | Port | Description |
-|-----|----------|------|-------------|
-| Discovery | TCP (LibP2P) | 4001 | Peer routing & registry |
-| Data (Fast) | QUIC (UDP) | 4002 | High-speed parallel transfer |
-
-## License
-
-MIT — see [LICENSE](https://github.com/iMarand/magnetk/blob/main/LICENSE)
+Full guide: [Documentation.md](Documentation.md). Examples: `examples/`.
+Run a relay: `magnetk relay` ([deployment guide](../../docs/RELAY_DEPLOYMENT.md)).

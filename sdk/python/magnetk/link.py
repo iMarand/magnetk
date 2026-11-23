@@ -1,84 +1,99 @@
+"""magnetk links.
+
+    magnetk:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&cs=<chunk size>
+            &mr=<manifest root>&xs=<provider node>&relay=<host:port>[&relay=...]
 """
-Magnetk Link Parser and Generator for Magnetk P2P.
-Supports DHT discovery and multi-relay configuration.
-"""
 
-from urllib.parse import urlencode, parse_qs, quote, unquote
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List
+from urllib.parse import parse_qs, quote
+
+DEFAULT_RELAY_PORT = 4002
 
 
-class MagnetkLink:
-    """Represents a parsed Magnetk magnet link."""
+def normalize_relay(addr: str) -> str:
+    """Accept host, host:port, quic://host:port or a Magnetk v1 multiaddr."""
+    s = addr.strip()
+    for prefix in ("quic://", "tcp://", "magnetk://"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+    if not s:
+        return ""
+    if s.startswith("/"):  # /ip4/HOST/tcp/PORT/p2p/ID (v1)
+        parts = s.split("/")
+        return "%s:%d" % (parts[2], DEFAULT_RELAY_PORT) if len(parts) > 2 else ""
+    if s.startswith("["):
+        return s if "]:" in s else "%s:%d" % (s, DEFAULT_RELAY_PORT)
+    if s.count(":") == 1:
+        host, port = s.split(":")
+        if port == "4003":  # v1 legacy-only port
+            return "%s:%d" % (host, DEFAULT_RELAY_PORT)
+        return s
+    return "%s:%d" % (s, DEFAULT_RELAY_PORT)
 
-    def __init__(self, file_hash='', file_name='', file_size=0,
-                 seed_id='', relay_addr='', dht_enabled=False):
-        self.file_hash = file_hash
-        self.file_name = file_name
-        self.file_size = file_size
-        self.seed_id = seed_id
-        self.relay_addr = relay_addr
-        self.dht_enabled = dht_enabled
+
+@dataclass
+class Link:
+    file_hash: str
+    file_name: str = ""
+    file_size: int = 0
+    chunk_size: int = 0
+    manifest_root: str = ""
+    seed_id: str = ""
+    relays: List[str] = field(default_factory=list)
+    dht: bool = False
 
     @staticmethod
-    def parse(uri: str) -> 'MagnetkLink':
-        """
-        Parse a magnetk URI string.
-        
-        Format: magnetk:?xt=urn:sha256:<hash>&dn=<name>&xl=<size>&xs=<seed_id>&relay=<addr>&dht=true
-        """
-        if not uri.startswith('magnetk:?'):
-            raise ValueError('Invalid magnet link: must start with magnetk:?')
+    def parse(uri: str) -> "Link":
+        uri = uri.strip()
+        if not uri.startswith("magnetk:?"):
+            raise ValueError("not a magnetk link (must start with magnetk:?)")
+        q = parse_qs(uri[len("magnetk:?"):], keep_blank_values=True)
 
-        query = uri[9:]
-        params = parse_qs(query)
+        def first(key: str, default: str = "") -> str:
+            values = q.get(key)
+            return values[0] if values else default
 
-        # Parse xt (required)
-        xt_list = params.get('xt', [''])
-        xt = xt_list[0] if xt_list else ''
-        if not xt.startswith('urn:sha256:'):
-            raise ValueError('Invalid magnet link: missing xt (urn:sha256:...)')
+        xt = first("xt")
+        if not xt.startswith("urn:sha256:"):
+            raise ValueError("magnetk link needs xt=urn:sha256:<hash>")
+        h = xt[len("urn:sha256:"):].lower()
+        if len(h) != 64 or any(c not in "0123456789abcdef" for c in h):
+            raise ValueError("file hash must be 64 hex characters")
+        relays: List[str] = []
+        for r in q.get("relay", []):
+            for one in r.split(","):
+                n = normalize_relay(one)
+                if n and n not in relays:
+                    relays.append(n)
+        return Link(
+            file_hash=h, file_name=first("dn"), file_size=int(first("xl", "0") or 0),
+            chunk_size=int(first("cs", "0") or 0), manifest_root=first("mr").lower(),
+            seed_id=first("xs"), relays=relays, dht=first("dht").lower() in ("1", "true"))
 
-        file_hash = xt.split(':')[2]
-        file_name = unquote(params.get('dn', ['unknown_file'])[0])
-        file_size = int(params.get('xl', ['0'])[0])
-        seed_id = unquote(params.get('xs', [''])[0])
-        relay_addr = params.get('relay', [''])[0]
-        dht_param = params.get('dht', [''])[0].lower()
-        dht_enabled = dht_param in ('true', '1')
-
-        # Must have at least one discovery method
-        if not relay_addr and not dht_enabled:
-            raise ValueError('Magnet link needs either relay address or dht=true for discovery')
-
-        return MagnetkLink(
-            file_hash=file_hash,
-            file_name=file_name,
-            file_size=file_size,
-            seed_id=seed_id,
-            relay_addr=relay_addr,
-            dht_enabled=dht_enabled,
-        )
+    @property
+    def relay_addr(self) -> str:
+        return self.relays[0] if self.relays else ""
 
     def __str__(self) -> str:
-        """Generate a magnetk URI string."""
-        parts = [f'xt=urn:sha256:{self.file_hash}']
-
+        parts = ["xt=urn:sha256:" + self.file_hash]
         if self.file_name:
-            parts.append(f'dn={quote(self.file_name)}')
-        if self.file_size > 0:
-            parts.append(f'xl={self.file_size}')
+            parts.append("dn=" + quote(self.file_name, safe=""))
+        if self.file_size:
+            parts.append("xl=%d" % self.file_size)
+        if self.chunk_size:
+            parts.append("cs=%d" % self.chunk_size)
+        if self.manifest_root:
+            parts.append("mr=" + self.manifest_root)
         if self.seed_id:
-            parts.append(f'xs={quote(self.seed_id)}')
-        if self.relay_addr:
-            parts.append(f'relay={self.relay_addr}')
-        if self.dht_enabled:
-            parts.append('dht=true')
+            parts.append("xs=" + quote(self.seed_id, safe=""))
+        for r in self.relays:
+            parts.append("relay=" + quote(r, safe=""))
+        if self.dht:
+            parts.append("dht=true")
+        return "magnetk:?" + "&".join(parts)
 
-        return f'magnetk:?{"&".join(parts)}'
 
-    @property
-    def has_relay(self) -> bool:
-        return bool(self.relay_addr)
-
-    @property
-    def has_dht(self) -> bool:
-        return self.dht_enabled
+MagnetkLink = Link  # v1 name
