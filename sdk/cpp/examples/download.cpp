@@ -1,38 +1,37 @@
-#include "magnetk.hpp"
+// Download a magnetk link (resumes automatically).
+//   download "<magnetk link>" [output] [relay host:port]
+#include <magnetk.hpp>
+
+#include <cstdio>
 #include <iostream>
-#include <string>
 
-int main(int argc, char* argv[]) {
+int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: ./download <magnetk_link> [output_dir_or_file]" << std::endl;
-        return 1;
+        std::cerr << "usage: download <link> [output] [relay host:port]\n";
+        return 2;
     }
-
-    std::string magnetLink = argv[1];
-    std::string outputPath = argc > 2 ? argv[2] : "./downloads/";
-
-    magnetk::Client::Config cfg;
-    cfg.hole_punch = true;
-    cfg.relay_assisted = "auto";
-    cfg.transport_mode = "auto";
-    
     try {
-        magnetk::Client client(cfg);
-
-        std::cout << "Downloading " << magnetLink << "..." << std::endl;
-
-        client.download(magnetLink, outputPath, [](const magnetk::Progress& p) {
-            std::cout << "\rProgress: " << p.percent
-                      << "% (" << p.done_chunks << "/" << p.total_chunks << " chunks)"
-                      << " | " << p.speed_mbps << " MB/s " << std::flush;
+        std::string link = argv[1];
+        // Relays default to the first relay= parameter of the link.
+        std::string relay = argc > 3 ? argv[3] : "";
+        if (relay.empty()) {
+            auto p = link.find("relay=");
+            if (p != std::string::npos) {
+                relay = link.substr(p + 6, link.find('&', p) - p - 6);
+                for (auto q = relay.find("%3A"); q != std::string::npos; q = relay.find("%3A")) relay.replace(q, 3, ":");
+            }
+        }
+        magnetk::NodeOptions opts;
+        opts.relays = {relay.empty() ? "127.0.0.1:4002" : relay};
+        magnetk::Node node(opts);
+        auto res = node.download(link, argc > 2 ? argv[2] : "", [](const magnetk::Progress& p) {
+            std::printf("\r%5.1f%%  %.1f MB/s  eta %.0fs  [%d source(s)]   ", p.percent, p.bytes_per_sec / 1e6, p.eta_seconds, p.sources);
+            std::fflush(stdout);
         });
-        
-        std::cout << std::endl << "Download complete!" << std::endl;
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::printf("\nsaved %s (%lld bytes in %.2fs), sha256 %s\n", res.path.c_str(), static_cast<long long>(res.size), res.seconds, res.hash.c_str());
+    } catch (const magnetk::Error& e) {
+        std::cerr << "\nerror: " << e.what() << "\n";
         return 1;
     }
-
     return 0;
 }

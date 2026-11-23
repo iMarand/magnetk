@@ -1,42 +1,51 @@
+// Download a magnetk link (multi-source, verified, resumable).
+//
+//	go run ./examples/download "magnetk:?xt=..." [output]
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"log"
-	"magnetk/sdk/go/magnetk"
-	"os"
+	"strings"
+	"time"
+
+	"github.com/iMarand/magnetk/sdk/go/magnetk"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run main.go <magnetk_link>")
-		return
+	relay := flag.String("relay", "", "relay address (default: the relays in the link)")
+	flag.Parse()
+	if flag.NArg() < 1 {
+		log.Fatal("usage: download [-relay addr] <link> [output]")
 	}
-	magnetLink := os.Args[1]
+	l, err := magnetk.ParseLink(flag.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
+	relays := l.Relays
+	if *relay != "" {
+		relays = strings.Split(*relay, ",")
+	}
+	if len(relays) == 0 {
+		log.Fatal("the link names no relay; pass -relay")
+	}
 
-	client, err := magnetk.NewClient(magnetk.ClientConfig{
-		HolePunch:     true,
-		RelayAssisted: "auto",
+	ctx := context.Background()
+	n, err := magnetk.ConnectConfig(ctx, magnetk.Config{Relays: relays})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer n.Close()
+
+	res, err := n.Download(ctx, flag.Arg(0), flag.Arg(1), &magnetk.DownloadOptions{
+		Progress: func(p magnetk.Progress) {
+			fmt.Printf("\r%5.1f%%  %6.1f MB/s  eta %-6v [%d source(s)]  ", p.Percent(), p.BytesPerSec/1e6, p.ETA.Round(time.Second), p.Sources)
+		},
 	})
 	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
+		log.Fatal("\n", err)
 	}
-	defer client.Close()
-
-	outputDir := "./downloads/"
-	os.MkdirAll(outputDir, 0755)
-
-	fmt.Printf("Downloading %s...\n", magnetLink)
-
-	// Download
-	err = client.Download(magnetLink, outputDir, func(p magnetk.Progress) {
-		fmt.Printf("\rProgress: %.1f%% | Speed: %.1f MB/s", p.Percent, p.SpeedMBps)
-	})
-	fmt.Println()
-
-	if err != nil {
-		log.Fatalf("Download failed: %v", err)
-	}
-
-	fmt.Println("Download complete!")
+	fmt.Printf("\nsaved %s (%d bytes in %v, %d bytes resumed)\n", res.Path, res.Manifest.Size, res.Elapsed.Round(time.Millisecond), res.Resumed)
 }

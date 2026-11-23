@@ -1,30 +1,35 @@
-from magnetk import MagnetkClient
+"""Share a file and keep serving it.
+
+    python share.py <file> [relay host:port]
+"""
+import os
 import sys
 import time
 
-def share():
-    client = MagnetkClient({
-        'relay_url': '69.169.109.243:4003',
-        'dht_enabled': True,
-        # 'dht_bootstrap_peers': [] # Optional
-    })
+import magnetk
 
-    file_path = "./examples/test_file.txt"
-    try:
-        print(f"Sharing {file_path}...")
-        link = client.share(file_path)
-        
-        print("-" * 50)
-        print("FILE SHARED SUCCESSFULLY!")
-        print(f"Magnetk Link: {link}")
-        print("-" * 50)
-        
-        print("Seeder running in background. Press Ctrl+C to stop.")
-        while True:
-            time.sleep(1)
-            
-    except Exception as e:
-        print(f"Error: {e}")
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    path = sys.argv[1]
+    relay = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("MAGNETK_RELAYS", "127.0.0.1:4002")
+
+    # listen=True also accepts peer-to-peer downloads (faster when reachable);
+    # everything still works through the relay when it is not.
+    with magnetk.Node(relays=relay, listen=True) as node:
+        shared = node.share(path)
+        print("Sharing %s (%d bytes)" % (shared.name, shared.size))
+        print("Magnetk Link:", shared.link)
+        print("Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(30)
+                info = node.info()
+                print("served %.1f MB so far" % (info["served_bytes"] / 1e6))
+        except KeyboardInterrupt:
+            pass
+
 
 if __name__ == "__main__":
-    share()
+    main()

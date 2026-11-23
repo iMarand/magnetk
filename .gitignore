@@ -40,3 +40,20 @@ sdk/cpp/build/
 # MsQuic artifacts (if built locally and not tracked)
 msquic/
 export
+# Magnetk v2 build outputs
+build/
+android/build/
+android/*.keystore
+sdk/cpp/build-*/
+sdk/python/magnetk/lib/
+sdk/python/build/
+sdk/python/dist/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+
+# Partial downloads and field-test data
+*.mkpart
+*.mkpart.state
+diag-data/
+*.idsig

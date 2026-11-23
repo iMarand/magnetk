@@ -1,6 +1,3 @@
-include README.md
-include LICENSE
-recursive-include magnetk *.py *.conf
-recursive-exclude examples *
-recursive-exclude config *
-exclude test.py test_sdk.py test_sdk.dat
+include README.md LICENSE Documentation.md
+recursive-include magnetk/lib *.dll *.so *.so.* *.dylib
+include magnetk/py.typed

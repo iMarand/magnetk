@@ -1,10 +1,27 @@
 /*
- * Magnetk P2P Transport Layer - MsQuic Wrapper
+ * Magnetk Transport Layer v2 - MsQuic wrapper
  *
- * Provides a simplified C API over MsQuic for high-performance QUIC transport.
- * Used by Go (via CGo) and C++ SDK directly.
+ * A small, thread-safe C API over MsQuic used by the Go core (via CGo) and
+ * available to C/C++ programs that want raw QUIC streams.
  *
- * Platform: Windows (schannel), Linux (openssl), macOS (openssl)
+ * Design rules
+ *  - Every handle (listener, connection, stream) is reference counted. A handle
+ *    returned to the application stays valid until the application calls the
+ *    matching *_close() function, no matter what the network does.
+ *  - Every I/O call takes a timeout in milliseconds:
+ *        0                    -> non-blocking, returns MAGNETK_WOULD_BLOCK
+ *        MAGNETK_INFINITE     -> wait forever
+ *        anything else        -> wait up to that long, returns MAGNETK_ERR_TIMEOUT
+ *  - Receives are zero-copy from MsQuic's buffers into the caller's buffer and
+ *    keep QUIC flow control closed while unread data is pending, so memory per
+ *    stream is bounded by the configured receive window.
+ *  - Sends are copied once and pipelined. A stream never holds more than
+ *    max(send_window, MsQuic ideal send buffer) unacknowledged bytes; callers
+ *    block (or get MAGNETK_WOULD_BLOCK) beyond that.
+ *  - Optionally, a notify callback reports readiness so event-driven callers
+ *    (the Go runtime) never park an OS thread inside a blocking call.
+ *
+ * Platform: Windows (Schannel), Linux/macOS (OpenSSL/quictls).
  */
 
 #ifndef MAGNETK_TRANSPORT_H
@@ -29,6 +46,8 @@
 extern "C" {
 #endif
 
+#define MAGNETK_TRANSPORT_API_VERSION 2
+
 /* ===== Status Codes ===== */
 typedef int32_t magnetk_status_t;
 
@@ -36,16 +55,34 @@ typedef int32_t magnetk_status_t;
 #define MAGNETK_ERR_INIT             -1
 #define MAGNETK_ERR_CONFIG           -2
 #define MAGNETK_ERR_LISTEN           -3
-#define MAGNETK_ERR_CONNECT          -4
+#define MAGNETK_ERR_CONNECT          -4   /* refused / unreachable / handshake failed */
 #define MAGNETK_ERR_SEND             -5
 #define MAGNETK_ERR_RECV             -6
 #define MAGNETK_ERR_TIMEOUT          -7
-#define MAGNETK_ERR_CLOSED           -8
+#define MAGNETK_ERR_CLOSED           -8   /* stream: end of data (EOF); handle: closed */
 #define MAGNETK_ERR_TLS              -9
 #define MAGNETK_ERR_MEMORY           -10
 #define MAGNETK_ERR_INVALID_PARAM    -11
 #define MAGNETK_ERR_STREAM           -12
 #define MAGNETK_ERR_NOT_READY        -13
+#define MAGNETK_WOULD_BLOCK          -14  /* only returned for timeout == 0 */
+#define MAGNETK_ERR_RESET            -15  /* peer aborted the stream */
+#define MAGNETK_ERR_TOO_LARGE        -16  /* datagram larger than path allows */
+
+#define MAGNETK_INFINITE             0xFFFFFFFFu
+
+/* ===== Readiness events (bit mask passed to the notify callback) ===== */
+#define MAGNETK_EV_READABLE   0x01u  /* stream: data, EOF or reset available */
+#define MAGNETK_EV_WRITABLE   0x02u  /* stream: send window opened or send failed */
+#define MAGNETK_EV_ACCEPT     0x04u  /* listener: connection ready; connection: peer stream ready */
+#define MAGNETK_EV_CLOSED     0x08u  /* object shut down */
+#define MAGNETK_EV_CONNECTED  0x10u  /* connection: handshake complete */
+#define MAGNETK_EV_DATAGRAM   0x20u  /* connection: datagram received */
+
+/* Called from MsQuic worker threads. Must be fast and must not call back
+ * into blocking magnetk_* functions. token is whatever the application set
+ * with *_set_token(); objects with token 0 never notify. */
+typedef void (*magnetk_notify_fn)(uint64_t token, uint32_t events);
 
 /* ===== Opaque Handle Types ===== */
 typedef struct magnetk_transport   magnetk_transport_t;
@@ -54,211 +91,206 @@ typedef struct magnetk_connection  magnetk_connection_t;
 typedef struct magnetk_stream      magnetk_stream_t;
 
 /* ===== Configuration ===== */
+#define MAGNETK_PROFILE_LOW_LATENCY     0
+#define MAGNETK_PROFILE_MAX_THROUGHPUT  1
+#define MAGNETK_PROFILE_SCAVENGER       2
+#define MAGNETK_PROFILE_REAL_TIME       3
+
+#define MAGNETK_CC_CUBIC  0
+#define MAGNETK_CC_BBR    1
+
 typedef struct magnetk_config {
-    /* Network */
-    const char* bind_address;     /* e.g. "0.0.0.0" or "127.0.0.1" */
-    uint16_t    port;             /* e.g. 4002 */
+    /* Network (listener) */
+    const char* bind_address;       /* "0.0.0.0", "::", "127.0.0.1", ... ("" = all) */
+    uint16_t    port;               /* listen port, 0 = ephemeral */
 
-    /* TLS (server only) */
-    const char* cert_file;        /* Path to PEM cert, NULL = self-signed */
-    const char* key_file;         /* Path to PEM key, NULL = self-signed */
-    int         no_cert_validation; /* 1 = skip cert validation (dev mode) */
+    /* TLS (server side).
+     *  Linux/macOS: PEM cert_file + key_file (required to listen).
+     *  Windows:     cert_hash = SHA-1 thumbprint (hex) of a cert in the
+     *               "My" store; empty = generated self-signed certificate. */
+    const char* cert_file;
+    const char* key_file;
+    const char* cert_hash;
+    int         cert_machine_store;  /* Windows: 1 = LocalMachine store, 0 = CurrentUser */
+    int         no_cert_validation;  /* client: 1 = accept any server cert (dev) */
 
-    /* ALPN */
-    const char* alpn;             /* e.g. "magnetk" */
+    const char* alpn;               /* application protocol, e.g. "magnetk/2" */
 
-    /* Performance */
-    uint32_t    max_connections;        /* Max concurrent connections */
-    uint32_t    idle_timeout_ms;        /* Connection idle timeout */
-    uint32_t    send_buffer_size;       /* Send buffer in bytes */
-    uint32_t    recv_buffer_size;       /* Recv buffer in bytes */
-    uint16_t    max_streams_per_conn;   /* Max bidi streams per connection */
+    /* Limits */
+    uint32_t    max_connections;    /* inbound connection cap per transport */
+    uint16_t    max_streams_per_conn;
 
-    /* Execution profile: 0=low_latency, 1=max_throughput */
-    int         execution_profile;
+    /* Timers */
+    uint32_t    idle_timeout_ms;
+    uint32_t    handshake_timeout_ms;
+    uint32_t    keepalive_ms;       /* 0 = no keep-alive pings */
+
+    /* Windows / buffers */
+    uint32_t    send_buffer_size;   /* per-stream unacked send window (bytes) */
+    uint32_t    recv_buffer_size;   /* per-stream receive window (bytes) */
+    uint32_t    conn_flow_window;   /* per-connection receive window, 0 = 4x stream */
+
+    /* Behaviour */
+    int         execution_profile;  /* MAGNETK_PROFILE_* */
+    int         congestion_control; /* MAGNETK_CC_* */
+    int         enable_datagrams;   /* 1 = allow unreliable QUIC datagrams */
 } magnetk_config_t;
 
-/* ===== Callbacks ===== */
-
-/* Called when a new connection is accepted by a listener */
-typedef void (*magnetk_on_connection_fn)(
-    magnetk_listener_t*    listener,
-    magnetk_connection_t*  conn,
-    void*                 user_data
-);
-
-/* Called when a new stream is opened on a connection */
-typedef void (*magnetk_on_stream_fn)(
-    magnetk_connection_t*  conn,
-    magnetk_stream_t*      stream,
-    void*                 user_data
-);
-
-/* Called when data is received on a stream */
-typedef void (*magnetk_on_data_fn)(
-    magnetk_stream_t*      stream,
-    const uint8_t*        data,
-    uint32_t              length,
-    int                   fin,      /* 1 if this is the last data */
-    void*                 user_data
-);
-
-/* Called when a stream or connection is closed */
-typedef void (*magnetk_on_close_fn)(
-    void*                 handle,
-    magnetk_status_t       status,
-    void*                 user_data
-);
-
-/* Called when a send completes */
-typedef void (*magnetk_on_send_complete_fn)(
-    magnetk_stream_t*      stream,
-    void*                 send_context,
-    int                   canceled,
-    void*                 user_data
-);
+/* Per-connection statistics (from MsQuic). */
+typedef struct magnetk_conn_stats {
+    uint32_t rtt_us;
+    uint32_t min_rtt_us;
+    uint32_t congestion_window;
+    uint32_t path_mtu;
+    uint64_t send_bytes;
+    uint64_t recv_bytes;
+    uint64_t send_packets;
+    uint64_t lost_packets;
+} magnetk_conn_stats_t;
 
 /* ===== Transport Lifecycle ===== */
 
-/* Initialize the transport layer. Must be called once before any other calls. */
+MAGNETK_API void magnetk_config_default(magnetk_config_t* config);
+
+/* Create a transport (one MsQuic registration). Strings in config are copied. */
 MAGNETK_API magnetk_status_t magnetk_transport_init(
-    magnetk_config_t*      config,
-    magnetk_transport_t**  out_transport
-);
+    const magnetk_config_t* config,
+    magnetk_transport_t**   out_transport);
 
-/* Shut down the transport layer and free all resources. */
-MAGNETK_API void magnetk_transport_shutdown(
-    magnetk_transport_t*   transport
-);
+/* Install the readiness callback used for every object of this transport. */
+MAGNETK_API void magnetk_transport_set_notify(
+    magnetk_transport_t* transport,
+    magnetk_notify_fn    fn);
 
-/* Get default config with sane defaults. */
-MAGNETK_API void magnetk_config_default(
-    magnetk_config_t*      config
-);
+/* Abort every connection and free the transport. All handles obtained from
+ * this transport must have been closed first, otherwise this blocks until
+ * they are. */
+MAGNETK_API void magnetk_transport_shutdown(magnetk_transport_t* transport);
 
-/* ===== Listener (Server Side) ===== */
+/* ===== Listener (server side) ===== */
 
-/* Start listening for incoming connections. */
+/* Listen on config.bind_address:config.port. */
 MAGNETK_API magnetk_status_t magnetk_listen(
-    magnetk_transport_t*       transport,
-    magnetk_on_connection_fn   on_connection,
-    magnetk_on_stream_fn       on_stream,
-    magnetk_on_data_fn         on_data,
-    magnetk_on_close_fn        on_close,
-    void*                     user_data,
-    magnetk_listener_t**       out_listener
-);
+    magnetk_transport_t*  transport,
+    magnetk_listener_t**  out_listener);
 
-/* Stop listening and close the listener. */
-MAGNETK_API void magnetk_listener_close(
-    magnetk_listener_t*    listener
-);
+/* Listen on an explicit address (NULL/"" = all interfaces, port 0 = ephemeral).
+ * One transport may run several listeners and outgoing connections. */
+MAGNETK_API magnetk_status_t magnetk_listen_on(
+    magnetk_transport_t*  transport,
+    const char*           bind_address,
+    uint16_t              port,
+    magnetk_listener_t**  out_listener);
 
-/* ===== Connection (Client Side) ===== */
+/* Wait for a connection whose TLS handshake has completed. */
+MAGNETK_API magnetk_status_t magnetk_listener_accept(
+    magnetk_listener_t*    listener,
+    uint32_t               timeout_ms,
+    magnetk_connection_t** out_conn);
 
-/* Connect to a remote server. Blocking until connected or timeout. */
+MAGNETK_API void     magnetk_listener_set_token(magnetk_listener_t* listener, uint64_t token);
+MAGNETK_API uint16_t magnetk_listener_port(magnetk_listener_t* listener);
+MAGNETK_API void     magnetk_listener_close(magnetk_listener_t* listener);
+
+/* ===== Connection ===== */
+
+/* Connect and complete the handshake (host may be a name or an IP literal). */
 MAGNETK_API magnetk_status_t magnetk_connect(
-    magnetk_transport_t*       transport,
-    const char*               host,
-    uint16_t                  port,
-    magnetk_on_stream_fn       on_stream,
-    magnetk_on_data_fn         on_data,
-    magnetk_on_close_fn        on_close,
-    void*                     user_data,
-    magnetk_connection_t**     out_conn
-);
+    magnetk_transport_t*   transport,
+    const char*            host,
+    uint16_t               port,
+    uint32_t               timeout_ms,
+    magnetk_connection_t** out_conn);
 
-/* Close a connection. */
-MAGNETK_API void magnetk_connection_close(
-    magnetk_connection_t*  conn
-);
+/* Wait for a stream opened by the peer. */
+MAGNETK_API magnetk_status_t magnetk_connection_accept_stream(
+    magnetk_connection_t* conn,
+    uint32_t              timeout_ms,
+    magnetk_stream_t**    out_stream);
 
-/* Set user data on a connection. */
-MAGNETK_API void magnetk_connection_set_userdata(
-    magnetk_connection_t*  conn,
-    void*                 user_data
-);
+MAGNETK_API void magnetk_connection_set_token(magnetk_connection_t* conn, uint64_t token);
 
-/* Get user data from a connection. */
-MAGNETK_API void* magnetk_connection_get_userdata(
-    magnetk_connection_t*  conn
-);
+/* 1 while the connection is usable, 0 once shutdown has begun. */
+MAGNETK_API int magnetk_connection_is_alive(magnetk_connection_t* conn);
 
-/* ===== Streams ===== */
+/* "ip:port" of the peer (empty string if unknown). Returns bytes written. */
+MAGNETK_API int magnetk_connection_remote_addr(magnetk_connection_t* conn, char* buf, int buf_len);
 
-/* Open a new bidirectional stream on a connection. */
-MAGNETK_API magnetk_status_t magnetk_stream_open(
-    magnetk_connection_t*      conn,
-    magnetk_on_data_fn         on_data,
-    magnetk_on_send_complete_fn on_send_complete,
-    magnetk_on_close_fn        on_close,
-    void*                     user_data,
-    magnetk_stream_t**         out_stream
-);
+MAGNETK_API magnetk_status_t magnetk_connection_stats(
+    magnetk_connection_t* conn,
+    magnetk_conn_stats_t* out_stats);
 
-/* Send data on a stream. The data is copied internally. */
-MAGNETK_API magnetk_status_t magnetk_stream_send(
-    magnetk_stream_t*      stream,
+/* Unreliable datagrams (requires enable_datagrams on both sides). */
+MAGNETK_API magnetk_status_t magnetk_connection_send_datagram(
+    magnetk_connection_t* conn,
     const uint8_t*        data,
-    uint32_t              length,
-    int                   fin     /* 1 = last send, close send direction */
-);
+    uint32_t              length);
 
-/* Send data on a stream with zero-copy. Caller must keep buffer alive until
-   on_send_complete callback fires. send_context is passed to callback. */
-MAGNETK_API magnetk_status_t magnetk_stream_send_zerocopy(
-    magnetk_stream_t*      stream,
-    const uint8_t*        data,
-    uint32_t              length,
-    int                   fin,
-    void*                 send_context
-);
-
-/* Gracefully shut down the send direction of a stream. */
-MAGNETK_API magnetk_status_t magnetk_stream_shutdown_send(
-    magnetk_stream_t*      stream
-);
-
-/* Close a stream (both directions). */
-MAGNETK_API void magnetk_stream_close(
-    magnetk_stream_t*      stream
-);
-
-/* Set user data on a stream. */
-MAGNETK_API void magnetk_stream_set_userdata(
-    magnetk_stream_t*      stream,
-    void*                 user_data
-);
-
-/* Get user data from a stream. */
-MAGNETK_API void* magnetk_stream_get_userdata(
-    magnetk_stream_t*      stream
-);
-
-/* ===== Synchronous Helpers (for CGo) ===== */
-
-/* Blocking send: sends data and waits for completion. */
-MAGNETK_API magnetk_status_t magnetk_stream_send_sync(
-    magnetk_stream_t*      stream,
-    const uint8_t*        data,
-    uint32_t              length,
-    int                   fin
-);
-
-/* Blocking recv: waits for data and copies it into buffer.
-   Returns actual bytes received in out_length. */
-MAGNETK_API magnetk_status_t magnetk_stream_recv_sync(
-    magnetk_stream_t*      stream,
+MAGNETK_API magnetk_status_t magnetk_connection_recv_datagram(
+    magnetk_connection_t* conn,
     uint8_t*              buffer,
     uint32_t              buffer_size,
     uint32_t*             out_length,
-    int*                  out_fin,
-    uint32_t              timeout_ms
-);
+    uint32_t              timeout_ms);
+
+/* Largest datagram payload currently allowed (0 = datagrams unavailable). */
+MAGNETK_API uint32_t magnetk_connection_max_datagram(magnetk_connection_t* conn);
+
+/* Begin shutdown (application error code is sent to the peer) without
+ * releasing the handle. Safe to call more than once. */
+MAGNETK_API void magnetk_connection_shutdown(magnetk_connection_t* conn, uint64_t error_code);
+
+/* Shut down (if needed) and release the handle. Do not use conn afterwards. */
+MAGNETK_API void magnetk_connection_close(magnetk_connection_t* conn);
+
+/* ===== Streams ===== */
+
+/* Open a bidirectional stream. The peer is told immediately. */
+MAGNETK_API magnetk_status_t magnetk_stream_open(
+    magnetk_connection_t* conn,
+    magnetk_stream_t**    out_stream);
+
+MAGNETK_API void     magnetk_stream_set_token(magnetk_stream_t* stream, uint64_t token);
+MAGNETK_API uint64_t magnetk_stream_id(magnetk_stream_t* stream);
+
+/* Queue data for sending (data is copied). fin=1 ends the send direction. */
+MAGNETK_API magnetk_status_t magnetk_stream_send(
+    magnetk_stream_t* stream,
+    const uint8_t*    data,
+    uint32_t          length,
+    int               fin,
+    uint32_t          timeout_ms);
+
+/* Read up to buffer_size bytes. Returns MAGNETK_OK with *out_length > 0,
+ * MAGNETK_ERR_CLOSED at end of stream, MAGNETK_ERR_RESET if the peer aborted. */
+MAGNETK_API magnetk_status_t magnetk_stream_recv(
+    magnetk_stream_t* stream,
+    uint8_t*          buffer,
+    uint32_t          buffer_size,
+    uint32_t*         out_length,
+    uint32_t          timeout_ms);
+
+/* Wait until every queued byte has been acknowledged by the peer. */
+MAGNETK_API magnetk_status_t magnetk_stream_flush(magnetk_stream_t* stream, uint32_t timeout_ms);
+
+/* Gracefully end the send direction (FIN after queued data). */
+MAGNETK_API magnetk_status_t magnetk_stream_shutdown_send(magnetk_stream_t* stream);
+
+/* Abort both directions immediately (pending data is discarded). */
+MAGNETK_API void magnetk_stream_abort(magnetk_stream_t* stream, uint64_t error_code);
+
+/* Release the handle. Queued outgoing data is still delivered (FIN is sent if
+ * it was not already); unread incoming data is discarded. */
+MAGNETK_API void magnetk_stream_close(magnetk_stream_t* stream);
+
+/* ===== Compatibility helpers (API v1 names) ===== */
+MAGNETK_API magnetk_status_t magnetk_stream_send_sync(
+    magnetk_stream_t* stream, const uint8_t* data, uint32_t length, int fin);
+MAGNETK_API magnetk_status_t magnetk_stream_recv_sync(
+    magnetk_stream_t* stream, uint8_t* buffer, uint32_t buffer_size,
+    uint32_t* out_length, int* out_fin, uint32_t timeout_ms);
 
 /* ===== Utility ===== */
-
-/* Returns a human-readable error string for a status code. */
 MAGNETK_API const char* magnetk_status_string(magnetk_status_t status);
 
 #ifdef __cplusplus

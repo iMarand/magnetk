@@ -1,494 +1,353 @@
-// Package config handles configuration loading and management
+// Package config loads Magnetk settings from a KEY=VALUE file
+// (config/settings.conf) and MAGNETK_<KEY> environment variables, and maps
+// them onto relay and node configurations.
+//
+// Precedence: command-line flags > environment > file > built-in defaults.
+// A missing file is not an error: everything has a sensible default.
 package config
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/iMarand/magnetk/go/pkg/netx"
+	"github.com/iMarand/magnetk/go/pkg/node"
+	"github.com/iMarand/magnetk/go/pkg/relay"
+	"github.com/iMarand/magnetk/go/pkg/transport"
 )
 
-// Config holds all configuration values
-// Config holds all configuration values
-type Config struct {
-	// Chunking settings
-	ChunkSizeMB       int
-	AdaptiveChunking  bool
-	MaxParallelChunks int
+// DefaultPath is where tools look for the settings file.
+const DefaultPath = "./config/settings.conf"
 
-	// Relay settings
-	RelayAddress     string
-	MaxRelayBufferGB int
-	DiskBackedBuffer bool
-
-	// Network settings
-	BindAddress       string // Listen on this address (0.0.0.0 or 127.0.0.1)
-	AdvertisedAddress string // Public IP to advertise to peers (e.g., VPS public IP)
-	DiscoveryPort     int    // libp2p discovery port
-	TransportPort     int    // MsQuic data transfer port
-	QUICPort          int    // Kept for backward compat, maps to TransportPort
-	PingIntervalSec   int
-	RetryBackoffSec   int
-	LocalhostMode     bool // Bind to 127.0.0.1 only
-
-	// TLS / Security
-	TLSCertFile      string // Path to TLS cert (empty = self-signed)
-	TLSKeyFile       string // Path to TLS key
-	NoCertValidation bool   // Skip cert validation (dev mode)
-
-	// Performance
-	MaxConnections          int
-	MaxStreamsPerConnection int
-	SendBufferSizeMB        int
-	RecvBufferSizeMB        int
-
-	// Environment
-	Env string // development | staging | production
-
-	// State persistence
-	StateDir        string
-	StateExpiryDays int
-
-	// Logging
-	LogLevel string
-	LogFile  string
-
-	// Relay-specific
-	EnableTrafficRouting bool
-	EnableAnalytics      bool
-
-	// DHT settings
-	DHTEnabled               bool     // Enable DHT discovery
-	DHTMode                  string   // "server", "client", or "auto"
-	DHTBootstrapPeers        []string // Custom bootstrap peer multiaddrs
-	DHTReannounceIntervalMin int      // Re-announce interval in minutes
-
-	// Multi-relay support
-	RelayAddresses    []string // Array of relay multiaddrs for failover/scaling
-	DiscoveryPriority []string // Discovery order: ["dht", "relay", "direct"]
-
-	// Connection strategy
-	RelayAssisted  string // "auto" | "true" | "false" — relay-assisted data transfer
-	HolePunch      bool   // Enable NAT hole punching (STUN + libp2p)
-	RelayTimeoutMs int    // How long to wait for direct before relay fallback
-	TransportMode  string // "auto" | "quic" | "tcp" — data transport mode
+// File holds raw settings.
+type File struct {
+	Path   string
+	values map[string]string
 }
 
-// DefaultConfig returns a Config with default values
-func DefaultConfig() *Config {
-	return &Config{
-		ChunkSizeMB:             1,
-		AdaptiveChunking:        true,
-		MaxParallelChunks:       10,
-		RelayAddress:            "0.0.0.0:4001",
-		MaxRelayBufferGB:        1,
-		DiskBackedBuffer:        false,
-		BindAddress:             "0.0.0.0",
-		DiscoveryPort:           4001,
-		TransportPort:           4002,
-		QUICPort:                4001,
-		PingIntervalSec:         10,
-		RetryBackoffSec:         5,
-		LocalhostMode:           false,
-		NoCertValidation:        true,
-		MaxConnections:          1000,
-		MaxStreamsPerConnection: 100,
-		SendBufferSizeMB:        4,
-		RecvBufferSizeMB:        4,
-		Env:                     "development",
-		StateDir:                "./transfer_states",
-		StateExpiryDays:         7,
-		LogLevel:                "info",
-		LogFile:                 "./magnetk.log",
-		EnableTrafficRouting:    true,
-		EnableAnalytics:         true,
-
-		// DHT defaults
-		DHTEnabled:               false,
-		DHTMode:                  "auto",
-		DHTBootstrapPeers:        nil, // Uses default IPFS bootstrap nodes
-		DHTReannounceIntervalMin: 30,
-
-		// Multi-relay defaults
-		RelayAddresses:    nil,
-		DiscoveryPriority: []string{"dht", "relay", "direct"},
-
-		// Connection strategy defaults
-		RelayAssisted:  "auto",
-		HolePunch:      true,
-		RelayTimeoutMs: 5000,
-		TransportMode:  "auto",
+// Load reads path (if it exists) and overlays MAGNETK_* environment variables.
+func Load(path string) (*File, error) {
+	f := &File{Path: path, values: map[string]string{}}
+	if path != "" {
+		fh, err := os.Open(path)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		if err == nil {
+			defer fh.Close()
+			sc := bufio.NewScanner(fh)
+			line := 0
+			for sc.Scan() {
+				line++
+				t := strings.TrimSpace(sc.Text())
+				if t == "" || strings.HasPrefix(t, "#") {
+					continue
+				}
+				k, v, ok := strings.Cut(t, "=")
+				if !ok {
+					return nil, fmt.Errorf("%s:%d: expected KEY=VALUE", path, line)
+				}
+				f.values[strings.ToUpper(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"'`)
+			}
+			if err := sc.Err(); err != nil {
+				return nil, err
+			}
+		}
 	}
+	for _, kv := range os.Environ() {
+		k, v, ok := strings.Cut(kv, "=")
+		if ok && strings.HasPrefix(k, "MAGNETK_") && k != "MAGNETK_TRACE" {
+			f.values[strings.TrimPrefix(k, "MAGNETK_")] = v
+		}
+	}
+	return f, nil
 }
 
-// Load reads configuration from a file
-func Load(path string) (*Config, error) {
-	file, err := os.Open(path)
+// Set overrides a value (used for command-line flags).
+func (f *File) Set(key, value string) { f.values[strings.ToUpper(key)] = value }
+
+// Has reports whether key was set anywhere.
+func (f *File) Has(key string) bool { _, ok := f.values[key]; return ok }
+
+// Str returns a string setting.
+func (f *File) Str(key, def string) string {
+	if v, ok := f.values[key]; ok && v != "" {
+		return v
+	}
+	return def
+}
+
+// Int returns an integer setting.
+func (f *File) Int(key string, def int) int {
+	if v, ok := f.values[key]; ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+		log.Printf("[config] %s=%q is not a number; using %d", key, v, def)
+	}
+	return def
+}
+
+// Float returns a float setting.
+func (f *File) Float(key string, def float64) float64 {
+	if v, ok := f.values[key]; ok && v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// Bool returns a boolean setting (true/false/1/0/yes/no/on/off).
+func (f *File) Bool(key string, def bool) bool {
+	v, ok := f.values[key]
+	if !ok || v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return def
+}
+
+// Dur returns a duration ("500ms", "10s", "2m"; a bare number is seconds).
+func (f *File) Dur(key string, def time.Duration) time.Duration {
+	v, ok := f.values[key]
+	if !ok || v == "" {
+		return def
+	}
+	if n, err := strconv.ParseFloat(v, 64); err == nil {
+		return time.Duration(n * float64(time.Second))
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return d
+	}
+	log.Printf("[config] %s=%q is not a duration; using %v", key, v, def)
+	return def
+}
+
+// Size returns a byte size ("64KB", "16MB", "1GB"; a bare number is bytes).
+func (f *File) Size(key string, def int64) int64 {
+	v, ok := f.values[key]
+	if !ok || v == "" {
+		return def
+	}
+	n, err := ParseSize(v)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open config file: %w", err)
+		log.Printf("[config] %s=%q: %v; using %d", key, v, err, def)
+		return def
 	}
-	defer file.Close()
-
-	cfg := DefaultConfig()
-	scanner := bufio.NewScanner(file)
-	lineNum := 0
-
-	for scanner.Scan() {
-		lineNum++
-		line := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Parse key=value
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue // Skip malformed lines
-		}
-
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		if err := cfg.set(key, value); err != nil {
-			return nil, fmt.Errorf("line %d: %w", lineNum, err)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	// Apply localhost mode
-	if cfg.LocalhostMode {
-		cfg.BindAddress = "127.0.0.1"
-	}
-
-	return cfg, nil
+	return n
 }
 
-// LoadOrCreate loads a config file, or creates one with defaults if not found.
-// This is useful for SDKs: when a user runs share.js or share.py for the first time,
-// a settings.conf is automatically generated so they can customize it.
-func LoadOrCreate(path string) (*Config, error) {
-	// Try to load existing config
-	cfg, err := Load(path)
-	if err == nil {
-		return cfg, nil
+// List returns a comma-separated list.
+func (f *File) List(key string) []string {
+	v := f.values[key]
+	if v == "" {
+		return nil
 	}
-
-	// If file doesn't exist, create it with defaults.
-	// errors.Is walks the wrap chain — handles fmt.Errorf("%w", ...) wrapping.
-	if !errors.Is(err, os.ErrNotExist) {
-		return nil, err // Real error, not just missing file
-	}
-
-	log.Printf("[config] Config not found at %s, creating default config...", path)
-
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Write default config
-	if err := os.WriteFile(path, []byte(DefaultConfigContent()), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write default config: %w", err)
-	}
-
-	log.Printf("[config] Default config created at %s", path)
-	return DefaultConfig(), nil
-}
-
-// (unwrapErr was removed — replaced with errors.Is at the call site)
-
-// DefaultConfigContent returns the full default settings.conf content with documentation.
-func DefaultConfigContent() string {
-	return `# Magnetk P2P Configuration
-# All values are optional - defaults are used when not specified
-# This file was auto-generated. Edit as needed.
-
-# ===== Chunking =====
-CHUNK_SIZE_MB=1
-ADAPTIVE_CHUNKING=true
-MAX_PARALLEL_CHUNKS=10
-
-# ===== Network Binding =====
-# BIND_ADDRESS: 0.0.0.0 = all interfaces, 127.0.0.1 = localhost only
-BIND_ADDRESS=0.0.0.0
-# ADVERTISED_ADDRESS: Public IP to advertise (leave empty for STUN auto-detect)
-ADVERTISED_ADDRESS=
-DISCOVERY_PORT=4001
-TRANSPORT_PORT=4002
-LOCALHOST_MODE=false
-
-# ===== Relay =====
-# Single relay (backward compatible)
-RELAY_ADDRESS=0.0.0.0:4001
-MAX_RELAY_BUFFER_GB=1
-DISK_BACKED_BUFFER=false
-
-# Multi-relay: comma-separated multiaddrs for failover/scaling
-# When one relay fails, the next is tried automatically.
-# Example: /ip4/69.169.109.243/tcp/4001/p2p/12D3...,/ip4/1.2.3.4/tcp/4001/p2p/12D3...
-RELAY_ADDRESSES=
-
-# ===== DHT (Decentralized Discovery) =====
-# Enable DHT for peer-to-peer discovery without central relay
-DHT_ENABLED=false
-# Mode: "server" (seeds/relays), "client" (downloaders), "auto" (auto-detect)
-DHT_MODE=auto
-# Custom bootstrap peers (comma-separated multiaddrs)
-# Default: Public IPFS bootstrap nodes
-DHT_BOOTSTRAP_PEERS=/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN,/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa,/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb,/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt,/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ
-# How often seeds re-announce to DHT (minutes)
-DHT_REANNOUNCE_INTERVAL_MIN=30
-
-# ===== Discovery Priority =====
-# Order to try discovery methods (comma-separated: dht, relay, direct)
-DISCOVERY_PRIORITY=dht,relay,direct
-
-# ===== TLS / Security =====
-# Leave empty for auto-generated self-signed certificates
-TLS_CERT_FILE=
-TLS_KEY_FILE=
-NO_CERT_VALIDATION=true
-
-# ===== Performance =====
-MAX_CONNECTIONS=1000
-MAX_STREAMS_PER_CONNECTION=100
-SEND_BUFFER_SIZE_MB=4
-RECV_BUFFER_SIZE_MB=4
-
-# ===== Environment =====
-# development | staging | production
-ENV=development
-
-# ===== Connection Health =====
-PING_INTERVAL_SEC=10
-RETRY_BACKOFF_SEC=5
-
-# ===== State Persistence =====
-STATE_DIR=./transfer_states
-STATE_EXPIRY_DAYS=7
-
-# ===== Logging =====
-LOG_LEVEL=info
-LOG_FILE=./magnetk.log
-
-# ===== Relay Features =====
-ENABLE_TRAFFIC_ROUTING=true
-ENABLE_ANALYTICS=true
-`
-}
-
-// set assigns a value to a config field by key name
-func (c *Config) set(key, value string) error {
-	switch key {
-	case "CHUNK_SIZE_MB":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid CHUNK_SIZE_MB: %w", err)
-		}
-		c.ChunkSizeMB = v
-	case "ADAPTIVE_CHUNKING":
-		c.AdaptiveChunking = strings.ToLower(value) == "true"
-	case "MAX_PARALLEL_CHUNKS":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid MAX_PARALLEL_CHUNKS: %w", err)
-		}
-		c.MaxParallelChunks = v
-	case "RELAY_ADDRESS":
-		c.RelayAddress = value
-	case "MAX_RELAY_BUFFER_GB":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid MAX_RELAY_BUFFER_GB: %w", err)
-		}
-		c.MaxRelayBufferGB = v
-	case "DISK_BACKED_BUFFER":
-		c.DiskBackedBuffer = strings.ToLower(value) == "true"
-	case "BIND_ADDRESS":
-		c.BindAddress = value
-	case "ADVERTISED_ADDRESS":
-		c.AdvertisedAddress = value
-	case "DISCOVERY_PORT":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid DISCOVERY_PORT: %w", err)
-		}
-		c.DiscoveryPort = v
-	case "TRANSPORT_PORT":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid TRANSPORT_PORT: %w", err)
-		}
-		c.TransportPort = v
-	case "QUIC_PORT":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid QUIC_PORT: %w", err)
-		}
-		c.QUICPort = v
-		c.TransportPort = v // Backward compat
-	case "PING_INTERVAL_SEC":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid PING_INTERVAL_SEC: %w", err)
-		}
-		c.PingIntervalSec = v
-	case "RETRY_BACKOFF_SEC":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid RETRY_BACKOFF_SEC: %w", err)
-		}
-		c.RetryBackoffSec = v
-	case "LOCALHOST_MODE":
-		c.LocalhostMode = strings.ToLower(value) == "true"
-	case "TLS_CERT_FILE":
-		c.TLSCertFile = value
-	case "TLS_KEY_FILE":
-		c.TLSKeyFile = value
-	case "NO_CERT_VALIDATION":
-		c.NoCertValidation = strings.ToLower(value) == "true"
-	case "MAX_CONNECTIONS":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid MAX_CONNECTIONS: %w", err)
-		}
-		c.MaxConnections = v
-	case "MAX_STREAMS_PER_CONNECTION":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid MAX_STREAMS_PER_CONNECTION: %w", err)
-		}
-		c.MaxStreamsPerConnection = v
-	case "SEND_BUFFER_SIZE_MB":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid SEND_BUFFER_SIZE_MB: %w", err)
-		}
-		c.SendBufferSizeMB = v
-	case "RECV_BUFFER_SIZE_MB":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid RECV_BUFFER_SIZE_MB: %w", err)
-		}
-		c.RecvBufferSizeMB = v
-	case "ENV":
-		c.Env = value
-	case "STATE_DIR":
-		c.StateDir = value
-	case "STATE_EXPIRY_DAYS":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid STATE_EXPIRY_DAYS: %w", err)
-		}
-		c.StateExpiryDays = v
-	case "LOG_LEVEL":
-		c.LogLevel = value
-	case "LOG_FILE":
-		c.LogFile = value
-	case "ENABLE_TRAFFIC_ROUTING":
-		c.EnableTrafficRouting = strings.ToLower(value) == "true"
-	case "ENABLE_ANALYTICS":
-		c.EnableAnalytics = strings.ToLower(value) == "true"
-
-	// DHT settings
-	case "DHT_ENABLED":
-		c.DHTEnabled = strings.ToLower(value) == "true"
-	case "DHT_MODE":
-		c.DHTMode = strings.ToLower(value)
-	case "DHT_BOOTSTRAP_PEERS":
-		if value != "" {
-			peers := strings.Split(value, ",")
-			for i := range peers {
-				peers[i] = strings.TrimSpace(peers[i])
-			}
-			c.DHTBootstrapPeers = peers
-		}
-	case "DHT_REANNOUNCE_INTERVAL_MIN":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid DHT_REANNOUNCE_INTERVAL_MIN: %w", err)
-		}
-		c.DHTReannounceIntervalMin = v
-
-	// Multi-relay
-	case "RELAY_ADDRESSES":
-		if value != "" {
-			addrs := strings.Split(value, ",")
-			for i := range addrs {
-				addrs[i] = strings.TrimSpace(addrs[i])
-			}
-			c.RelayAddresses = addrs
-		}
-	case "DISCOVERY_PRIORITY":
-		if value != "" {
-			priority := strings.Split(value, ",")
-			for i := range priority {
-				priority[i] = strings.TrimSpace(strings.ToLower(priority[i]))
-			}
-			c.DiscoveryPriority = priority
-		}
-
-	// Connection strategy
-	case "RELAY_ASSISTED":
-		c.RelayAssisted = strings.ToLower(value)
-	case "HOLE_PUNCH":
-		c.HolePunch = strings.ToLower(value) == "true"
-	case "RELAY_TIMEOUT_MS":
-		v, err := strconv.Atoi(value)
-		if err != nil {
-			return fmt.Errorf("invalid RELAY_TIMEOUT_MS: %w", err)
-		}
-		c.RelayTimeoutMs = v
-	case "TRANSPORT_MODE":
-		mode := strings.ToLower(value)
-		if mode == "auto" || mode == "quic" || mode == "tcp" {
-			c.TransportMode = mode
-		} else {
-			return fmt.Errorf("invalid TRANSPORT_MODE: %s (must be auto|quic|tcp)", value)
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
 		}
 	}
-	return nil
+	return out
 }
 
-// ChunkSizeBytes returns the chunk size in bytes
-func (c *Config) ChunkSizeBytes() int64 {
-	return int64(c.ChunkSizeMB) * 1024 * 1024
+// ParseSize parses "64KB", "16MB", "1.5GB", "4096".
+func ParseSize(s string) (int64, error) {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	mult := float64(1)
+	for _, u := range []struct {
+		suffix string
+		m      float64
+	}{{"GIB", 1 << 30}, {"MIB", 1 << 20}, {"KIB", 1 << 10}, {"GB", 1 << 30}, {"MB", 1 << 20}, {"KB", 1 << 10}, {"G", 1 << 30}, {"M", 1 << 20}, {"K", 1 << 10}, {"B", 1}} {
+		if strings.HasSuffix(s, u.suffix) {
+			mult = u.m
+			s = strings.TrimSpace(strings.TrimSuffix(s, u.suffix))
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid size")
+	}
+	return int64(n * mult), nil
 }
 
-// MaxRelayBufferBytes returns the max relay buffer size in bytes
-func (c *Config) MaxRelayBufferBytes() int64 {
-	return int64(c.MaxRelayBufferGB) * 1024 * 1024 * 1024
+// ===== runtime / resources =====
+
+// ApplyRuntime applies process-wide resource limits:
+//
+//	MAX_PROCS        CPU cores Go may use (default: all)
+//	MEMORY_LIMIT_MB  soft memory limit for the Go heap (default: none)
+//	GC_PERCENT       garbage collector target (default 100)
+func (f *File) ApplyRuntime() {
+	if n := f.Int("MAX_PROCS", 0); n > 0 {
+		runtime.GOMAXPROCS(n)
+	}
+	if mb := f.Int("MEMORY_LIMIT_MB", 0); mb > 0 {
+		debug.SetMemoryLimit(int64(mb) << 20)
+	}
+	if p := f.Int("GC_PERCENT", 0); p != 0 {
+		debug.SetGCPercent(p)
+	}
 }
 
-// SendBufferSizeBytes returns the send buffer size in bytes
-func (c *Config) SendBufferSizeBytes() uint32 {
-	return uint32(c.SendBufferSizeMB) * 1024 * 1024
+// ===== mapping =====
+
+// QUIC returns transport tuning shared by relays and nodes.
+func (f *File) QUIC() transport.Config {
+	q := transport.Config{
+		MaxConnections:    uint32(f.Int("MAX_CONNECTIONS", 10000)),
+		MaxStreamsPerConn: uint16(f.Int("MAX_STREAMS_PER_CONNECTION", 1024)),
+		IdleTimeout:       f.Dur("IDLE_TIMEOUT", 60*time.Second),
+		HandshakeTimeout:  f.Dur("HANDSHAKE_TIMEOUT", 10*time.Second),
+		KeepAlive:         f.Dur("KEEPALIVE", 15*time.Second),
+		Profile:           transport.ParseProfile(strings.ToLower(f.Str("EXECUTION_PROFILE", ""))),
+		Congestion:        transport.ParseCongestion(strings.ToLower(f.Str("CONGESTION_CONTROL", ""))),
+		DisableDatagrams:  !f.Bool("DATAGRAMS", true),
+		CertHash:          f.Str("TLS_CERT_HASH", ""),
+		CertMachineStore:  f.Bool("TLS_CERT_MACHINE_STORE", false),
+	}
+	// v1 names (MB) and v2 names (any size)
+	q.SendWindow = uint32(f.Size("SEND_WINDOW", int64(f.Int("SEND_BUFFER_SIZE_MB", 8))<<20))
+	q.RecvWindow = uint32(f.Size("RECV_WINDOW", int64(f.Int("RECV_BUFFER_SIZE_MB", 8))<<20))
+	if f.Has("KEEPALIVE") && f.Dur("KEEPALIVE", 0) == 0 {
+		q.KeepAlive = -1
+	}
+	return q
 }
 
-// RecvBufferSizeBytes returns the recv buffer size in bytes
-func (c *Config) RecvBufferSizeBytes() uint32 {
-	return uint32(c.RecvBufferSizeMB) * 1024 * 1024
-}
-
-// EffectiveBindAddress returns the bind address, respecting localhost mode
-func (c *Config) EffectiveBindAddress() string {
-	if c.LocalhostMode {
+func (f *File) bindHost() string {
+	if f.Bool("LOCALHOST_MODE", false) {
 		return "127.0.0.1"
 	}
-	return c.BindAddress
+	return f.Str("BIND_ADDRESS", "0.0.0.0")
 }
 
-// IsDevelopment returns true if running in development mode
-func (c *Config) IsDevelopment() bool {
-	return c.Env == "development" || c.Env == ""
+// Relay maps settings onto a relay configuration.
+func (f *File) Relay() relay.Config {
+	listen := f.Str("RELAY_LISTEN", "")
+	if listen == "" {
+		listen = fmt.Sprintf("%s:%d", f.bindHost(), f.Int("RELAY_PORT", f.Int("TRANSPORT_PORT", 4002)))
+	}
+	legacy := f.Str("LEGACY_LISTEN", "")
+	if legacy == "" && f.Bool("LEGACY_V1", true) {
+		legacy = fmt.Sprintf("%s:%d", f.bindHost(), f.Int("LEGACY_PORT", 4003))
+	}
+	if strings.EqualFold(legacy, "off") {
+		legacy = ""
+	}
+	return relay.Config{
+		ID:                f.Str("RELAY_ID", ""),
+		Listen:            listen,
+		LegacyListen:      legacy,
+		Mode:              netx.ParseMode(strings.ToLower(f.Str("TRANSPORT", f.Str("TRANSPORT_MODE", "auto")))),
+		CertFile:          f.Str("TLS_CERT_FILE", ""),
+		KeyFile:           f.Str("TLS_KEY_FILE", ""),
+		CertHash:          f.Str("TLS_CERT_HASH", ""),
+		QUIC:              f.QUIC(),
+		AuthTokens:        f.List("AUTH_TOKENS"),
+		Peers:             f.List("RELAY_PEERS"),
+		ClusterSecret:     f.Str("CLUSTER_SECRET", ""),
+		MaxFrame:          int(f.Size("MAX_MESSAGE_SIZE", 16<<20)),
+		MaxQueueBytes:     f.Size("MAX_QUEUE_PER_NODE", 32<<20),
+		SlowConsumer:      relay.SlowConsumerPolicy(strings.ToLower(f.Str("SLOW_CONSUMER", "drop"))),
+		MaxSessions:       f.Int("MAX_NODES", f.Int("MAX_CONNECTIONS", 100000)),
+		MaxSubsPerSession: f.Int("MAX_SUBSCRIPTIONS_PER_NODE", 10000),
+		MaxPipes:          f.Int("MAX_PIPES", 10000),
+		PipeBufferBytes:   int(f.Size("PIPE_BUFFER", 256<<10)),
+		OfflineMaxMsgs:    f.Int("OFFLINE_MAX_MESSAGES", 1000),
+		OfflineMaxBytes:   f.Size("OFFLINE_MAX_BYTES", 256<<20),
+		OfflineTTL:        f.Dur("OFFLINE_TTL", time.Hour),
+		SessionTimeout:    f.Dur("SESSION_TIMEOUT", 45*time.Second),
+		RateLimit:         f.Float("RATE_LIMIT", 0),
+		RateBurst:         f.Int("RATE_BURST", 0),
+	}
+}
+
+// Node maps settings onto a node configuration.
+func (f *File) Node() node.Config {
+	relays := f.List("RELAYS")
+	if len(relays) == 0 {
+		relays = f.List("RELAY_ADDRESSES")
+	}
+	if v := f.Str("RELAY_ADDRESS", ""); v != "" && v != "0.0.0.0:4001" && len(relays) == 0 {
+		relays = []string{v}
+	}
+	route := node.Route(strings.ToLower(f.Str("ROUTE", "")))
+	switch strings.ToLower(f.Str("RELAY_ASSISTED", "")) { // v1 name
+	case "true":
+		if route == "" {
+			route = node.RouteRelay
+		}
+	case "false":
+		if route == "" {
+			route = node.RouteDirect
+		}
+	}
+	listen := f.Str("DIRECT_LISTEN", "")
+	if listen == "" {
+		listen = fmt.Sprintf("%s:%d", f.bindHost(), f.Int("DIRECT_PORT", 0))
+	}
+	adv := f.List("ADVERTISE")
+	if ip := f.Str("ADVERTISED_ADDRESS", ""); ip != "" && f.Int("DIRECT_PORT", 0) > 0 { // v1 name: bare IP
+		adv = append(adv, fmt.Sprintf("%s:%d", ip, f.Int("DIRECT_PORT", 0)))
+	}
+	cs := f.Size("CHUNK_SIZE", int64(f.Int("CHUNK_SIZE_MB", 0))<<20)
+	return node.Config{
+		ID:                f.Str("NODE_ID", ""),
+		Token:             f.Str("TOKEN", f.Str("AUTH_TOKEN", "")),
+		Meta:              f.Str("NODE_META", ""),
+		Relays:            relays,
+		Transport:         netx.ParseMode(strings.ToLower(f.Str("TRANSPORT", f.Str("TRANSPORT_MODE", "auto")))),
+		QUIC:              f.QUIC(),
+		VerifyPeer:        !f.Bool("NO_CERT_VALIDATION", true),
+		CAFile:            f.Str("TLS_CA_FILE", ""),
+		CertFile:          f.Str("TLS_CERT_FILE", ""),
+		KeyFile:           f.Str("TLS_KEY_FILE", ""),
+		Listen:            f.Bool("DIRECT", false),
+		ListenAddr:        listen,
+		AdvertiseAddrs:    adv,
+		UPnP:              f.Bool("UPNP", f.Bool("HOLE_PUNCH", false)),
+		Route:             route,
+		DirectTimeout:     f.Dur("DIRECT_TIMEOUT", 0),
+		WatchPresence:     f.Bool("WATCH_PRESENCE", false),
+		InboxSize:         f.Int("INBOX_SIZE", 0),
+		SubBuffer:         f.Int("SUB_BUFFER", 0),
+		SlowConsumerWait:  f.Dur("SLOW_CONSUMER_WAIT", 0),
+		SendQueueBytes:    f.Size("SEND_QUEUE", 0),
+		RequestTimeout:    f.Dur("REQUEST_TIMEOUT", 0),
+		HeartbeatInterval: f.Dur("HEARTBEAT_INTERVAL", 0),
+		HeartbeatTimeout:  f.Dur("HEARTBEAT_TIMEOUT", 0),
+		ChunkSize:         cs,
+		StreamsPerSource:  f.Int("STREAMS_PER_SOURCE", f.Int("MAX_PARALLEL_CHUNKS", 0)),
+		CacheDir:          f.Str("CACHE_DIR", ""),
+		LinkRelays:        f.List("LINK_RELAYS"),
+	}
+}
+
+// WriteDefault writes the documented default settings file if path does
+// not exist yet.
+func WriteDefault(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(path, []byte(DefaultContent), 0o644)
 }

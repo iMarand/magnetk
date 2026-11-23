@@ -1,0 +1,108 @@
+package config
+
+// DefaultContent is the documented settings.conf written on first run.
+// Every key is optional; every key can also be set as MAGNETK_<KEY>.
+const DefaultContent = `# Magnetk settings
+# Every value is optional. Environment variables MAGNETK_<KEY> override this
+# file, and command-line flags override both. Sizes accept KB/MB/GB,
+# durations accept ms/s/m (a bare number means seconds).
+
+# ===================== Node (SDKs, share/get/msg tools) =====================
+
+# Relays to connect to, in preference order. Two VPSes = automatic failover.
+# RELAYS=relay1.example.com:4002,relay2.example.com:4002
+
+# Fixed node id (empty = the relay assigns one). Must be unique per network.
+# NODE_ID=
+
+# Token, if your relays require one (see AUTH_TOKENS below).
+# TOKEN=
+
+# Transport: auto (QUIC, TCP fallback) | quic | tcp
+TRANSPORT=auto
+
+# Data path for pipes and file transfers:
+#   auto   = peer-to-peer when reachable, otherwise through the relay
+#   relay  = always through the relay (works behind any NAT/firewall)
+#   direct = peer-to-peer only
+ROUTE=auto
+
+# Accept direct (peer-to-peer) connections on DIRECT_PORT (0 = random).
+DIRECT=false
+DIRECT_PORT=0
+# Extra public addresses to advertise, e.g. a VPS IP: 203.0.113.7:4012
+# ADVERTISE=
+# Ask the home router to forward DIRECT_PORT (UPnP / NAT-PMP).
+UPNP=false
+
+# Liveness: ping every HEARTBEAT_INTERVAL, fail over after HEARTBEAT_TIMEOUT.
+HEARTBEAT_INTERVAL=5s
+HEARTBEAT_TIMEOUT=15s
+REQUEST_TIMEOUT=10s
+
+# Incoming messages: buffered direct messages (inbox) and per-subscription
+# handler buffer. When a buffer is full, delivery waits SLOW_CONSUMER_WAIT
+# (absorbs bursts without loss) and then drops until the consumer catches up.
+INBOX_SIZE=8192
+SUB_BUFFER=1024
+SLOW_CONSUMER_WAIT=250ms
+
+# Files: 0 = automatic chunk size (1 MiB, larger for very big files).
+CHUNK_SIZE=0
+STREAMS_PER_SOURCE=4
+
+# ========================= Relay (relay server only) ========================
+
+RELAY_PORT=4002
+BIND_ADDRESS=0.0.0.0
+# Magnetk v1 clients (JS SDK) on plain TCP. "off" disables it.
+LEGACY_PORT=4003
+
+# RELAY_ID=relay-eu-1
+# Clients must present one of these tokens (empty = open relay).
+# AUTH_TOKENS=token1,token2
+
+# Federation: other relays to link with, and the shared secret.
+# RELAY_PEERS=relay2.example.com:4002
+# CLUSTER_SECRET=change-me
+
+MAX_NODES=100000
+MAX_MESSAGE_SIZE=16MB
+MAX_QUEUE_PER_NODE=32MB
+# drop | disconnect  (what to do with nodes that cannot keep up)
+SLOW_CONSUMER=drop
+MAX_PIPES=10000
+OFFLINE_MAX_MESSAGES=1000
+OFFLINE_MAX_BYTES=256MB
+OFFLINE_TTL=1h
+SESSION_TIMEOUT=45s
+# Messages per second per node (0 = unlimited)
+RATE_LIMIT=0
+
+# ============================ TLS / Security ===============================
+
+# Linux/macOS: PEM files (empty = generated self-signed certificate).
+# TLS_CERT_FILE=/etc/magnetk/fullchain.pem
+# TLS_KEY_FILE=/etc/magnetk/privkey.pem
+# Windows: SHA-1 thumbprint of a certificate in the "My" store.
+# TLS_CERT_HASH=
+# true = accept self-signed certificates (development / private networks).
+NO_CERT_VALIDATION=true
+# TLS_CA_FILE=
+
+# ======================= QUIC tuning / resources ===========================
+
+# max_throughput | low_latency | realtime | scavenger
+EXECUTION_PROFILE=max_throughput
+# cubic | bbr   (BBR is an MsQuic preview feature; cubic is the stable default)
+CONGESTION_CONTROL=cubic
+SEND_WINDOW=8MB
+RECV_WINDOW=8MB
+IDLE_TIMEOUT=60s
+KEEPALIVE=15s
+DATAGRAMS=true
+
+# CPU cores to use (0 = all) and a soft memory limit for the Go heap.
+MAX_PROCS=0
+MEMORY_LIMIT_MB=0
+`

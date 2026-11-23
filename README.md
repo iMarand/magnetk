@@ -47,7 +47,31 @@ Smart contracts handle everything automatically. Seeders earn per chunk delivere
 
 Users pay with VISA or crypto. Crypto conversion happens invisibly in the background.
 
-**Consider all those as upcoming not fully yet implemented**
+**Consider all those as upcoming not fully yet implemented** — see *What works today* below for what is implemented.
+
+---
+
+## What works today (v2)
+
+* **Relay-based network**: nodes connect out to one or more relays (any VPS), so everything works behind NAT, firewalls and mobile networks. Two or more relays **federate**: nodes on different relays reach each other, and nodes fail over automatically.
+* **Peer-to-peer when possible**: pipes and file transfers go directly between nodes that can reach each other, and through the relay otherwise (`ROUTE=auto|direct|relay`).
+* **Bidirectional messaging**: direct messages (with delivery receipts, offline storage or as unreliable datagrams), publish/subscribe with wildcards, queue groups (load balancing), request/reply to a node or to a service topic, presence and lookups.
+* **Pipes**: reliable full-duplex byte streams between any two nodes.
+* **Files**: content-addressed sharing, parallel multi-source downloads, every chunk verified, resumable, self-contained links.
+* **Transports**: QUIC (MsQuic, TLS 1.3, datagrams) with an automatic TCP + TLS 1.3 fallback on the same port.
+* **SDKs**: Go, Python, C++, C (and the v1 JavaScript SDK through the relay's legacy port), an Android field-test app, and the `magnetk` CLI.
+* **Configurable**: one documented `settings.conf` (+ `MAGNETK_*` environment variables) for transport, routing, buffers, limits, CPU cores and memory.
+
+```bash
+magnetk relay                                   # on a VPS (or locally)
+magnetk sub -relay vps:4002 "chat.>"            # terminal 1
+magnetk pub -relay vps:4002 chat.general hello  # terminal 2
+magnetk share -relay vps:4002 big.iso           # prints a magnetk link
+magnetk get "magnetk:?xt=urn:sha256:..."        # anywhere
+magnetk bench -local all                        # measure on this machine
+```
+
+Docs: [Architecture & protocol](docs/ARCHITECTURE.md) · [Running relays (1 or 2 VPS)](docs/RELAY_DEPLOYMENT.md) · [Field testing on phones](docs/FIELD_TEST.md) · [Benchmarks](docs/BENCHMARKS.md) · [Configuration](config/settings.conf)
 
 ---
 
@@ -94,22 +118,25 @@ Magnetk is the only system that combines all four: **QUIC transport + DHT routin
 
 ## SDKs
 
-| Language | Transport | Status |
-|---|---|---|
-| Go | QUIC (MsQuic) | Available |
-| JavaScript (Node.js) | TCP fallback | Available |
-| Python | QUIC | Available |
-| C++ | QUIC | Available |
-| React Native / Flutter | — | Roadmap |
-| Browser (WebRTC) | WebRTC | Roadmap |
+| Language | Transport | Status | Docs |
+|---|---|---|---|
+| Go | QUIC + TCP fallback | Available (v2) | [sdk/go](sdk/go/Documentation.md) |
+| Python | QUIC + TCP fallback (native engine via ctypes) | Available (v2) | [sdk/python](sdk/python/Documentation.md) |
+| C++ | QUIC + TCP fallback (header-only, loads libmagnetk) | Available (v2) | [sdk/cpp](sdk/cpp/Documentation.md) |
+| C | QUIC + TCP fallback (`libmagnetk` C ABI) | Available (v2) | [sdk/c](sdk/c/README.md) |
+| JavaScript (Node.js) | v1 protocol over TCP (relay legacy port 4003) | Available (v1) | [sdk/js](sdk/js) |
+| Android | TCP + TLS 1.3 (engine as JNI library) | Field-test app | [android](docs/FIELD_TEST.md) |
+| React Native / Flutter / iOS | — | Roadmap | |
+| Browser (WebRTC / WebTransport) | — | Roadmap | |
 
 
 ## Installation
 ### Prerequisites
-- Go v1.20+
-- GCC — Windows: MinGW-w64 · Linux: build-essential · macOS: Xcode Command Line Tools
-- CMake v3.16+ (C++ SDK)
-- Node.js v16+ (JS SDK)
+- Go 1.22+
+- GCC for cgo — Windows: MSYS2 (`C:\msys64\ucrt64` or `mingw64`) · Linux: build-essential · macOS: Xcode Command Line Tools
+- MsQuic is built from the `msquic/` checkout (CMake, PowerShell 7; Visual Studio Build Tools on Windows, perl/make on Linux). Without it, `scripts/build.sh tcp` builds a pure-Go TCP + TLS binary.
+- CMake 3.16+ (C++ SDK), Python 3.8+ (Python SDK), Node.js 16+ (JS SDK)
+- Android SDK + NDK + JDK for the field-test APK (no Android Studio needed)
 
 ### Clone and Build
 
@@ -124,10 +151,18 @@ chmod +x scripts/build.sh
 ./scripts/build.sh
 ```
 
-**Windows (PowerShell)**
-```powershell
-$env:Path = "C:\msys64\mingw64\bin;" + $env:Path
-./scripts/build.bat
+**Windows**
+```bat
+scripts\build.bat            :: add "msquic" to rebuild MsQuic, "android" for the APK, "all" for everything
+```
+
+Output: `build/bin/magnetk` (CLI) and `build/lib/libmagnetk` (C ABI for Python/C++/C, also copied into the Python package). Test everything:
+
+```bash
+cd go && go test ./...                 # engine, relay, transport, field-test kit
+cd sdk/go && go test ./...             # Go SDK
+python -m pytest sdk/python/tests      # Python SDK
+cmake -S sdk/cpp -B sdk/cpp/build && cmake --build sdk/cpp/build && sdk/cpp/build/bin/test_sdk
 ```
 
 ---
@@ -167,10 +202,11 @@ $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
 
 | Job | Protocol | Port |
 |---|---|---|
-| Peer discovery (Go/Python) | TCP LibP2P | 4001 |
-| Peer discovery (JS) | TCP Raw | 4003 |
-| Data transfer (Go/Python/C++) | QUIC UDP | 4002 |
-| Data transfer (JS) | TCP Raw | 4002 |
+| Relay: nodes and federation links (QUIC) | UDP | 4002 |
+| Relay: TCP + TLS 1.3 fallback | TCP | 4002 |
+| Relay: v1 / JavaScript SDK | TCP | 4003 |
+| Node direct (peer-to-peer) listener | UDP + TCP | `DIRECT_PORT` (random by default) |
+| Field-test host direct port | UDP + TCP | 4012 |
 
 ---
 
@@ -194,8 +230,8 @@ $env:Path = "C:\msys64\mingw64\bin;" + $env:Path
 
 | Phase | Focus |
 |---|---|
-| ✅ Current | QUIC transport, single-file transfer, relay, basic SDKs |
-| 🔨 Phase 1 | Multi-seeder download, DHT, NAT hole punching, reliable foundation |
+| ✅ Done (v2) | QUIC + TCP transport, relay federation and failover, messaging, pub/sub, RPC, pipes, multi-source verified downloads, Go/Python/C++/C SDKs, Android field-test app |
+| 🔨 Phase 1 | DHT, NAT hole punching, QUIC on Android, mobile SDKs |
 | 🔨 Phase 2 | Smart contract payments, chunk accounting, VISA on-ramp |
 | 🔨 Phase 3 | Tiered resource system, staked node registry, guaranteed availability |
 | 📋 Phase 4 | Messaging, pub/sub event bus, distributed RPC, live streaming |
@@ -212,11 +248,15 @@ Full development roadmap: [Roadmap.md](./docs/ROADMAP.md)
 
 ## Troubleshooting
 
-**Build fails on Windows** — use MinGW-w64 GCC. If `go build` returns `exit status 2` you are using MSYS2 POSIX GCC instead.
+**Build fails on Windows** — use MSYS2 UCRT64 or MinGW-w64 GCC (`scripts\build.bat` finds it) and make sure the compiler and its DLLs come from the same MSYS2 environment.
 
-**Relay connection refused** — check that `bin/relay` is running and port 4001 is open.
+**Cannot connect to a relay** — the relay needs UDP *and* TCP 4002 open (OS firewall and the VPS security group). `magnetk ping -relay host:4002` shows round trips; clients fall back to TCP automatically if UDP is blocked.
 
-**Slow download speeds** — check that you have enough peers seeding the file. Use `client.Peers(hash)` to see available seeders.
+**Slow transfers** — run `magnetk bench -local all` to see this machine's ceiling, and `magnetk diag` or the Android app to measure the real network ([FIELD_TEST.md](docs/FIELD_TEST.md)). Seeders should use `-direct` (accept peer-to-peer) so downloaders do not have to go through the relay.
+
+**`msquic.dll` / `libmsquic.so` not found** — keep it next to the binary (the build scripts copy it) or on the library path.
+
+**Antivirus flags `magnetk.exe`** — unsigned Go network tools sometimes trigger machine-learning heuristics (detections ending in `!ml`). Build from source and, if needed, allow the build folder.
 
 ---
 

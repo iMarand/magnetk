@@ -1,36 +1,41 @@
+// Share a file and serve it until interrupted.
+//
+//	go run ./examples/share -relay 127.0.0.1:4002 bigfile.iso
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"log"
-	"magnetk/sdk/go/magnetk"
+	"strings"
+
+	"github.com/iMarand/magnetk/sdk/go/magnetk"
 )
 
 func main() {
-	seed, err := magnetk.NewSeed(magnetk.SeedConfig{
-		RelayAddr: "69.169.109.243:4003",
-		HolePunch: true,
-	})
-	if err != nil {
-		log.Fatalf("Failed to start seed: %v", err)
+	relay := flag.String("relay", "127.0.0.1:4002", "relay address(es), comma separated")
+	flag.Parse()
+	if flag.NArg() != 1 {
+		log.Fatal("usage: share [-relay addr] <file>")
 	}
-	defer seed.Close()
-
-	// Publish File
-	filePath := "./test_file.txt" // Ensure this file exists
-	fmt.Printf("Sharing %s...\n", filePath)
-
-	link, err := seed.PublishFile(filePath)
+	ctx := context.Background()
+	n, err := magnetk.ConnectConfig(ctx, magnetk.Config{Relays: strings.Split(*relay, ","), Listen: true})
 	if err != nil {
-		log.Fatalf("Failed to publish file: %v", err)
+		log.Fatal(err)
 	}
+	defer n.Close()
 
-	fmt.Println("--------------------------------------------------")
-	fmt.Println("FILE SHARED SUCCESSFULLY!")
-	fmt.Println("Magnetk Link:", link)
-	fmt.Println("--------------------------------------------------")
-
-	// Keep running to serve the file
-	fmt.Println("Press Ctrl+C to stop seeding...")
+	f, err := n.Share(ctx, flag.Arg(0), &magnetk.ShareOptions{Progress: func(done, total int64) {
+		if total > 0 {
+			fmt.Printf("\rhashing %.0f%%", float64(done)*100/float64(total))
+		}
+	}})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("\rSharing %s (%d bytes)\n", f.Name, f.Size)
+	fmt.Println("Magnetk Link:", f.Link)
+	fmt.Println("Serving; Ctrl+C to stop.")
 	select {}
 }

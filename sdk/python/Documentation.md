@@ -1,175 +1,196 @@
-# Magnetk Python SDK Documentation
+# Magnetk Python SDK
 
-The Python SDK is a convenience wrapper around the native Go `seed` and `peer` binaries. It is ideal when you want to control Magnetk from Python scripts while still using the production transfer engine.
+Messaging, pub/sub, request/reply, byte pipes and verified multi-source
+file transfer for Python 3.8+. The SDK calls the Magnetk engine in
+`libmagnetk` (a native library built from `go/capi`) through `ctypes`: no
+subprocesses, no compiler needed at install time, and the same code paths
+and performance as the Go SDK and the `magnetk` CLI.
 
-The Python SDK supports:
+## Install
 
-- sharing by spawning `seed`
-- downloading by spawning `peer`
-- relay identity lookup
-- relay-assisted mode flags
-- hole-punch mode flags
-- automatic config file creation
-- Magnetk link parsing through `MagnetkLink`
-
-## Requirements
-
-The native binaries must be available through `PATH`, environment variables, or config.
-
-Environment variables:
-
-```powershell
-$env:MAGNETK_SEED_PATH="D:\More_Projects\Projects\Magnetk\bin\seed.exe"
-$env:MAGNETK_PEER_PATH="D:\More_Projects\Projects\Magnetk\bin\peer.exe"
+```bash
+# from the repository root, after building the native library:
+scripts/build.sh            # or scripts\build.bat on Windows
+pip install ./sdk/python    # wheel contains magnetk/lib/libmagnetk.* and msquic
 ```
 
-Or pass explicit paths:
+The library is looked up in this order: `MAGNETK_LIB` (full path),
+`magnetk/lib/` inside the package, `<repo>/build/lib`, then the system
+search path. `magnetk.version()` and `magnetk.quic_available()` confirm it
+loaded.
+
+## Quick start
 
 ```python
-client = MagnetkClient({
-    "seeder_path": r"D:\More_Projects\Projects\Magnetk\bin\seed.exe",
-    "peer_path": r"D:\More_Projects\Projects\Magnetk\bin\peer.exe",
-})
+import magnetk
+
+# Embedded relay for local testing; in production use your VPS: "vps:4002"
+relay = magnetk.Relay(listen="127.0.0.1:0")
+
+alice = magnetk.Node(relay.address, id="alice")
+bob = magnetk.Node(relay.address, id="bob")
+
+bob.subscribe("chat.>", lambda m: print(f"{m.sender} on {m.subject}: {m.text}"))
+alice.publish("chat.general", "hello everyone")
+
+alice.send("bob", b"direct hello", receipt=True)   # waits for delivery
+print(bob.receive(timeout=5).text)
+
+bob.serve("svc.upper", lambda m: m.text.upper())   # request handler
+print(alice.request_topic("svc.upper", "make me loud"))  # b'MAKE ME LOUD'
+
+alice.close(); bob.close(); relay.close()
 ```
 
-## Share A File
+`Node` and `Relay` are context managers (`with magnetk.Node(...) as n:`).
+
+## Node
 
 ```python
-from magnetk import MagnetkClient
-import time
-
-client = MagnetkClient({
-    "relay_url": "69.169.109.243:4003",
-    "seed_port": 4002,
-    "hole_punch": True,
-    "relay_assisted": "auto",
-    "transport_mode": "auto",
-})
-
-link = client.share(r"D:\MUSIC\el.mp4")
-print(link)
-
-while True:
-    time.sleep(1)
+magnetk.Node(relays, *, id=None, token=None, workers=8, **options)
 ```
 
-The Python SDK starts `seed` in the background. Keep your Python process alive while you want to serve the file.
+`relays` is `"host:port"`, `"a:4002,b:4002"` or a list — several relays
+give failover. Options (all optional, see `sdk/c/include/magnetk.h`):
 
-Example:
+| Option | Default | Meaning |
+|---|---|---|
+| `transport` | `"auto"` | `"auto"` (QUIC, TCP fallback), `"quic"`, `"tcp"` |
+| `route` | `"auto"` | data path for pipes/files: `"auto"`, `"direct"`, `"relay"` |
+| `listen` | `False` | accept peer-to-peer connections (needed to be a fast seeder) |
+| `listen_addr`, `advertise`, `upnp` | | direct listener address, extra public addresses, router port mapping |
+| `meta` | `""` | string other nodes see in presence/lookup |
+| `watch_presence` | `False` | receive join/leave events |
+| `request_timeout` | `10` | seconds, default for requests and receipts |
+| `inbox_size`, `sub_buffer`, `slow_consumer_wait_ms` | 8192, 1024, 250 | incoming buffers and burst tolerance |
+| `chunk_size`, `streams_per_source`, `cache_dir`, `link_relays` | auto, 4, user cache, relays | file transfer tuning |
+| `verify_peer`, `ca_file` | `False` | require trusted relay certificates |
+| `congestion`, `profile`, `connect_timeout`, `log` | `"cubic"`, `"max_throughput"`, 15 s, `False` | QUIC tuning, engine logs to stderr |
 
-```powershell
-cd sdk\python
-python examples\share.py
-```
+`workers` is the number of threads running message handlers.
 
-## Download A File
+Properties and health: `node.id`, `node.info()` (relay, protocol, observed
+address, RTT), `node.ping()` (seconds), `node.nodes(prefix="")`,
+`node.relay_stats()`, `node.wait_connected(timeout)`.
+
+## Messages
 
 ```python
-from magnetk import MagnetkClient
-
-client = MagnetkClient({
-    "relay_url": "69.169.109.243:4003",
-    "hole_punch": True,
-    "relay_assisted": "auto",
-    "transport_mode": "auto",
-})
-
-path = client.get("magnetk:?...", "./downloads/")
-print("saved to", path)
+node.send(to, data, *, receipt=False, store=False, unreliable=False, timeout=10.0)
+node.publish(topic, data, *, unreliable=False)
+node.request(to, data=b"", timeout=10.0) -> bytes
+node.request_topic(topic, data=b"", timeout=10.0) -> bytes
 ```
 
-Example:
+* `data` may be `bytes`, `bytearray`, `memoryview` or `str` (UTF-8).
+* `receipt=True` waits until the relay delivered it (raises
+  `NoRouteError` if the node is offline); `store=True` keeps it at the
+  relay for an offline node; `unreliable=True` uses a QUIC datagram
+  (lowest latency, may be lost, ~1 KB max).
+* Topics are dot-separated tokens. Patterns: `a.b` exact, `a.*` one token,
+  `a.>` one or more tokens.
 
-```powershell
-cd sdk\python
-python examples\download.py "magnetk:?..."
-```
-
-## Configuration
+Receiving:
 
 ```python
-client = MagnetkClient({
-    "relay_url": "69.169.109.243:4003",
-    "relays": [],
-    "seed_port": 4002,
-    "peer_port": 0,
+sub = node.subscribe("sensors.*.temp", handler)        # handler(msg) on a worker thread
+sub = node.subscribe("jobs.>", handler, queue="workers")  # load-balanced group
+sub.unsubscribe()
 
-    "dht_enabled": False,
-    "dht_bootstrap_peers": [],
-    "discovery_priority": ["dht", "relay", "direct"],
+node.serve("svc.resize", lambda m: do(m.data))   # return bytes/str/None, or raise
+node.on_request(lambda m: ...)                   # requests sent to this node id
 
-    "stun_servers": ["stun:stun.l.google.com:19302"],
-    "hole_punch": True,
-    "relay_assisted": "auto",
-    "enable_relay_fallback": True,
-    "relay_timeout": 5000,
-    "transport_mode": "auto",
-
-    "seeder_path": None,
-    "peer_path": None,
-    "config_path": None,
-    "auto_config": True,
-})
+msg = node.receive(timeout=1.0)                  # direct messages + handler-less subscriptions
+for msg in node.messages(): ...
 ```
 
-Important fields:
+`Message`: `kind` (`"direct"`, `"publish"`, `"request"`, `"presence"`),
+`sender`, `subject`, `data`, `text`, `json()`, `datagram`,
+`is_request`, `respond(data)`, `respond_error(text)`.
 
-- `relay_url`: relay TCP identity/discovery address, usually `host:4003`.
-- `seed_port`: seed data port, usually `4002`.
-- `relay_assisted`: `"auto"`, `"true"`, `"false"`, `True`, or `False`.
-- `hole_punch`: passes `-holepunch` to the native binaries.
-- `transport_mode`: `"auto"`, `"quic"`, or `"tcp"`.
-- `seeder_path`, `peer_path`: explicit binary locations.
+Handlers for one subscription run in order. If a handler falls behind,
+delivery waits up to `slow_consumer_wait_ms`, then drops (counted).
 
-## Method Reference
+## Pipes (byte streams)
 
-### `MagnetkClient(config=None)`
+```python
+def upper(pipe):
+    data = pipe.read_all()
+    pipe.write(data.upper())
+    pipe.close()
 
-Creates a client wrapper.
-
-### `client.share(file_path)` / `client.seed(file_path)`
-
-Starts the native `seed` binary and returns the generated magnet link.
-
-### `client.get(magnet_uri, output_path=None)` / `client.download(magnet_uri, output_path)`
-
-Starts the native `peer` binary and waits for completion.
-
-### `client.hash(file_path)`
-
-Calculates SHA-256 of a local file.
-
-### `MagnetkLink.parse(uri)`
-
-Parses a `magnetk:?` link.
-
-## Relay Address Notes
-
-The Python SDK expects `relay_url` like:
-
-```text
-69.169.109.243:4003
+bob.handle_pipe("upper", upper)                 # one thread per incoming pipe
+p = alice.open_pipe("bob", "upper", route="auto")  # "auto" | "direct" | "relay"
+p.write(b"hello"); p.close_write()
+print(p.read_all(), p.direct)
 ```
 
-It connects to `4003` to fetch the relay Peer ID, then passes a full multiaddr to the native seed:
+`Pipe`: `read(n, timeout)`, `read_exactly(n)`, `read_all()`, `write(data)`,
+`close_write()`, `close()`, attributes `peer`, `service`, `meta`,
+`direct`. `node.accept_pipe(timeout)` accepts pipes for services without a
+handler.
 
-```text
-/ip4/69.169.109.243/tcp/4001/p2p/<RELAY_PEER_ID>
+## Files
+
+```python
+shared = node.share("big.iso")          # hashes once (cached), serves it
+print(shared.link)                       # magnetk:?xt=urn:sha256:...&relay=...
+
+res = other.download(shared.link, "downloads/",
+                     progress=lambda p: print(f"{p.percent:.1f}% {p.bytes_per_sec/1e6:.1f} MB/s"))
+print(res.path, res.size, res.seconds)
+
+dl = other.download_async(link, seed=True)   # keep seeding afterwards
+while not dl.poll(0.5):
+    print(dl.progress)
+node.unshare(shared.hash)
+node.find_providers(shared.hash)
 ```
 
-## Relay-Assisted Behavior
+Downloads use every provider in parallel (several streams each, pipelined
+chunk requests), verify every chunk and the whole file, write to
+`<name>.mkpart` and resume after interruption. Use `listen=True` on
+seeders so downloaders can connect directly.
 
-Because Python uses the native `peer`, transfer behavior matches the CLI:
+## Relay
 
-- direct MsQuic/TCP first
-- libp2p circuit relay fallback when allowed
-- hole-punch attempt when possible
-
-Use `"relay_assisted": "false"` only when you require real direct P2P and want failure instead of relay data.
-
-## Verify
-
-```powershell
-cd sdk\python
-python -m py_compile magnetk\client.py magnetk\link.py
+```python
+relay = magnetk.Relay(listen="0.0.0.0:4002", tokens=["secret"],
+                      peers=["other-vps:4002"], cluster_secret="s3cret")
+relay.address, relay.port, relay.stats(); relay.close()
 ```
+
+For production run `magnetk relay` as a service instead
+([docs/RELAY_DEPLOYMENT.md](../../docs/RELAY_DEPLOYMENT.md)).
+
+## Errors
+
+All derive from `magnetk.MagnetkError`: `TimeoutError` (also a builtin
+`TimeoutError`), `NotConnectedError` (also `ConnectionError`),
+`NoRouteError`, `UnauthorizedError`, `RemoteError` (handler raised),
+`RejectedError` (pipe refused), `NoProvidersError`, `DroppedError`,
+`InvalidError`, `ClosedError`.
+
+## Links
+
+```python
+link = magnetk.Link.parse(uri)   # file_hash, file_name, file_size, chunk_size, manifest_root, relays
+magnetk.normalize_relay("/ip4/1.2.3.4/tcp/4003")   # -> "1.2.3.4:4002"
+```
+
+## Examples and tests
+
+`examples/`: `local_demo.py` (everything in one process), `chat.py`,
+`rpc_service.py`, `share.py`, `download.py`.
+
+```bash
+python -m pytest sdk/python/tests      # 14 integration tests
+```
+
+## Threading and resources
+
+All methods are thread-safe. Blocking calls release the GIL while waiting
+in native code. Each `Node` uses one dispatcher thread plus `workers`
+handler threads; the engine itself runs on Go's scheduler (`MAX_PROCS` /
+`MAGNETK_MAX_PROCS` limits CPU cores, `MAGNETK_MEMORY_LIMIT_MB` the heap).
+Always `close()` nodes (or use `with`) so the relay sees a clean leave.
