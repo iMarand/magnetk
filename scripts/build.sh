@@ -34,6 +34,12 @@ fi
 
 if [ "$MODE" = "msquic" ] || [ "$MODE" = "all" ] || { [ ! -f "$MSQUIC_OUT/libmsquic.$LIBEXT" ] && [ -z "${MSQUIC_LIB:-}" ]; }; then
   echo "=== MsQuic (Release, OpenSSL) ==="
+  if [ ! -f msquic/scripts/build.ps1 ]; then
+    echo "=== fetching MsQuic source (microsoft/msquic @ ${MSQUIC_REV:=6c284c8ab68efd5a152646746dec4697e17a842c}) ==="
+    git clone https://github.com/microsoft/msquic.git msquic
+    git -C msquic checkout -q "$MSQUIC_REV"
+    git -C msquic submodule update --init --recursive
+  fi
   pwsh -NoProfile -File msquic/scripts/build.ps1 -Config Release -Tls openssl -DisableTest -DisableTools
 fi
 

@@ -134,7 +134,7 @@ Magnetk is the only system that combines all four: **QUIC transport + DHT routin
 ### Prerequisites
 - Go 1.22+
 - GCC for cgo — Windows: MSYS2 (`C:\msys64\ucrt64` or `mingw64`) · Linux: build-essential · macOS: Xcode Command Line Tools
-- MsQuic is built from the `msquic/` checkout (CMake, PowerShell 7; Visual Studio Build Tools on Windows, perl/make on Linux). Without it, `scripts/build.sh tcp` builds a pure-Go TCP + TLS binary.
+- MsQuic is built from a `msquic/` checkout (the build scripts clone microsoft/msquic at a pinned commit if it is missing) (CMake, PowerShell 7; Visual Studio Build Tools on Windows, perl/make on Linux). Without it, `scripts/build.sh tcp` builds a pure-Go TCP + TLS binary.
 - CMake 3.16+ (C++ SDK), Python 3.8+ (Python SDK), Node.js 16+ (JS SDK)
 - Android SDK + NDK + JDK for the field-test APK (no Android Studio needed)
 
