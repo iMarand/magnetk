@@ -2,6 +2,7 @@ package files
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -23,13 +24,18 @@ type Store struct {
 	pools sync.Map // chunk size -> *sync.Pool of []byte
 
 	ServedChunks atomic.Uint64
-	ServedBytes  atomic.Uint64
+	ServedBytes  atomic.Uint64 // chunk bytes served (uncompressed)
+	WireBytes    atomic.Uint64 // bytes actually sent (after compression)
+
+	// NoCompression disables on-the-fly chunk compression for new shares.
+	NoCompression bool
 }
 
 type shared struct {
-	m    *Manifest
-	path string
-	f    *os.File
+	m        *Manifest
+	path     string
+	f        *os.File
+	compress bool // content looked compressible when it was shared
 }
 
 // NewStore creates an empty store.
@@ -50,11 +56,12 @@ func (s *Store) Add(path string, m *Manifest) error {
 		f.Close()
 		return fmt.Errorf("%s changed size since it was hashed", path)
 	}
+	compress := !s.NoCompression && isCompressible(f, m.Size)
 	s.mu.Lock()
 	if old := s.files[m.Hash]; old != nil {
 		old.f.Close()
 	}
-	s.files[m.Hash] = &shared{m: m, path: path, f: f}
+	s.files[m.Hash] = &shared{m: m, path: path, f: f, compress: compress}
 	s.mu.Unlock()
 	return nil
 }
@@ -121,8 +128,9 @@ func (s *Store) putBuffer(size int, b *[]byte) {
 	}
 }
 
-// writeChunk sends one chunk frame with a single write.
-func (s *Store) writeChunk(w io.Writer, sh *shared, idx uint32) error {
+// writeChunk sends one chunk frame with a single write, compressed when the
+// requester accepts it and it saves enough.
+func (s *Store) writeChunk(w io.Writer, sh *shared, idx uint32, acceptZ bool) error {
 	m := sh.m
 	if int(idx) >= m.NumChunks() {
 		fe := wire.FileError{Code: wire.ErrCodeNotFound, Index: idx, Msg: "chunk index out of range"}
@@ -143,11 +151,26 @@ func (s *Store) writeChunk(w io.Writer, sh *shared, idx uint32) error {
 		}
 		return nil
 	}
+	if acceptZ && sh.compress {
+		var z bytes.Buffer
+		z.Grow(n / 2)
+		raw := buf[wire.HeaderSize+4:]
+		if deflateTo(&z, raw) == nil && float64(z.Len()) < chunkMaxRatio*float64(n) {
+			if _, err := w.Write(append(wire.ChunkDataZHeader(idx, n, z.Len()), z.Bytes()...)); err != nil {
+				return err
+			}
+			s.ServedChunks.Add(1)
+			s.ServedBytes.Add(uint64(n))
+			s.WireBytes.Add(uint64(wire.HeaderSize + 8 + z.Len()))
+			return nil
+		}
+	}
 	if _, err := w.Write(buf); err != nil {
 		return err
 	}
 	s.ServedChunks.Add(1)
 	s.ServedBytes.Add(uint64(n))
+	s.WireBytes.Add(uint64(len(buf)))
 	return nil
 }
 
@@ -192,8 +215,9 @@ func (s *Store) Serve(rw io.ReadWriter) error {
 				}
 				continue
 			}
+			acceptZ := req.Flags&wire.ChunkAcceptCompressed != 0
 			for _, idx := range req.Indices {
-				if err := s.writeChunk(rw, sh, idx); err != nil {
+				if err := s.writeChunk(rw, sh, idx, acceptZ); err != nil {
 					return err
 				}
 			}

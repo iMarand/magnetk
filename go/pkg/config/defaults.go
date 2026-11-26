@@ -54,6 +54,12 @@ SLOW_CONSUMER_WAIT=250ms
 # Files: 0 = automatic chunk size (1 MiB, larger for very big files).
 CHUNK_SIZE=0
 STREAMS_PER_SOURCE=4
+# Chunk requests in flight per stream. 0 = adaptive: grows on fast links,
+# shrinks on slow or unstable ones (measured while downloading).
+PIPELINE=0
+# Compress chunks of compressible files (text, CSV, JSON, logs, raw images)
+# on the fly. Already compressed files are detected and sent as they are.
+COMPRESSION=true
 
 # ========================= Relay (relay server only) ========================
 

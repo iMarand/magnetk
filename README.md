@@ -57,7 +57,7 @@ Users pay with VISA or crypto. Crypto conversion happens invisibly in the backgr
 * **Peer-to-peer when possible**: pipes and file transfers go directly between nodes that can reach each other, and through the relay otherwise (`ROUTE=auto|direct|relay`).
 * **Bidirectional messaging**: direct messages (with delivery receipts, offline storage or as unreliable datagrams), publish/subscribe with wildcards, queue groups (load balancing), request/reply to a node or to a service topic, presence and lookups.
 * **Pipes**: reliable full-duplex byte streams between any two nodes.
-* **Files**: content-addressed sharing, parallel multi-source downloads, every chunk verified, resumable, self-contained links.
+* **Files**: content-addressed sharing, parallel multi-source downloads, every chunk verified, resumable, self-contained links. The in-flight window adapts to the network, compressible files are compressed on the fly, and byte-range downloads fetch only part of a file.
 * **Transports**: QUIC (MsQuic, TLS 1.3, datagrams) with an automatic TCP + TLS 1.3 fallback on the same port.
 * **SDKs**: Go, Python, C++, C (and the v1 JavaScript SDK through the relay's legacy port), an Android field-test app, and the `magnetk` CLI.
 * **Secure identities and chat**: every device has an identity key. Relays bind node ids to keys, so nobody can use yours. Chat and voice notes are **end-to-end encrypted** and signed. Strangers arrive as message requests, and contacts can be verified with a safety number. `magnetk://node@relay?key=...` addresses carry proof of who answers ([security model](docs/SECURITY.md)).
@@ -68,7 +68,7 @@ magnetk relay                                   # on a VPS (or locally)
 magnetk sub -relay vps:4002 "chat.>"            # terminal 1
 magnetk pub -relay vps:4002 chat.general hello  # terminal 2
 magnetk share -relay vps:4002 big.iso           # prints a magnetk link
-magnetk get "magnetk:?xt=urn:sha256:..."        # anywhere
+magnetk get "magnetk:?xt=urn:sha256:..."        # anywhere (-offset 100MB -length 8MB for a byte range)
 magnetk bench -local all                        # measure on this machine
 magnetk chat -relay vps:4002 a52-3cc9 "hi"       # chat (text, -audio voice notes) with any node
 magnetk open "magnetk://a52-3cc9@vps:4002/chat" # what clicking a magnetk:// link runs
@@ -239,7 +239,7 @@ cmake -S sdk/cpp -B sdk/cpp/build && cmake --build sdk/cpp/build && sdk/cpp/buil
 | Phase | Focus |
 |---|---|
 | ✅ Done (v2) | QUIC + TCP transport, relay federation and failover, messaging, pub/sub, RPC, pipes, multi-source verified downloads, Go/Python/C++/C SDKs, Android field-test app |
-| ✅ Done (v2.1) | Identity keys bound by relays, end-to-end encrypted and signed chat and voice notes, message requests, safety numbers, `magnetk://` addresses and link handlers, install scripts, Magnetk-vs-HTTPS comparison |
+| ✅ Done (v2.1) | Adaptive pipeline, on-the-fly compression, byte-range downloads, encrypted file attachments in chat, AAC voice notes. Identity keys bound by relays, end-to-end encrypted and signed chat and voice notes, message requests, safety numbers, `magnetk://` addresses and link handlers, install scripts, Magnetk-vs-HTTPS comparison |
 | 🔨 Phase 1 | Double Ratchet (forward secrecy), encrypted group chat, DHT, NAT hole punching, QUIC on Android, mobile SDKs |
 | 🔨 Phase 2 | Smart contract payments, chunk accounting, VISA on-ramp |
 | 🔨 Phase 3 | Tiered resource system, staked node registry, guaranteed availability |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import json
 import logging
 import queue
@@ -89,7 +90,9 @@ class Message:
 class ChatMessage:
     """A secure chat message (or ack) - see Node.chat_send.
 
-    kind        "text" | "audio" | "ack"
+    kind        "text" | "audio" | "file" | "ack"
+    pending     True while a "file" attachment is still downloading (a final message follows)
+    name, link  file attachments: file name and the (encrypted) file's magnetk link
     sender      node id (authenticated by the relay and by the signature)
     text        message text (for an ack: the acknowledged message id)
     path        where a received attachment (voice note) was saved
@@ -118,6 +121,9 @@ class ChatMessage:
     safety_checked: bool = False
     rtt_ms: float = 0.0
     error: str = ""
+    name: str = ""
+    link: str = ""
+    pending: bool = False
     raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -127,12 +133,21 @@ class ChatMessage:
                    sha256=d.get("sha256", ""), path=d.get("path", ""), attachment_ok=d.get("verified", False),
                    encrypted=d.get("encrypted", False), trust=d.get("trust", ""), fingerprint=d.get("fingerprint", ""),
                    request=d.get("request", False), safety_checked=d.get("safety_checked", False),
-                   rtt_ms=d.get("rtt_ms", 0.0), error=d.get("error", ""), raw=d)
+                   rtt_ms=d.get("rtt_ms", 0.0), error=d.get("error", ""), name=d.get("name", ""),
+                   link=d.get("link", ""), pending=d.get("pending", False), raw=d)
 
     @property
     def trusted(self) -> bool:
         """Signed by the key this contact had before (or first contact)."""
         return self.trust in ("verified", "new") and not self.error
+
+
+def _mime_for(path: str) -> str:
+    import mimetypes
+    ext = os.path.splitext(path)[1].lower()
+    known = {".wav": "audio/wav", ".m4a": "audio/mp4", ".aac": "audio/mp4", ".opus": "audio/ogg", ".ogg": "audio/ogg",
+             ".mp3": "audio/mpeg"}
+    return known.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
 class Subscription:
@@ -278,6 +293,8 @@ class Progress:
     eta: float
     sources: int
     streams: int
+    window: int = 0       # chunk requests in flight (adaptive)
+    wire_bytes: int = 0   # bytes received on the wire (less than done when compressed)
 
 
 @dataclass
@@ -288,6 +305,8 @@ class DownloadResult:
     bytes: int
     resumed: int
     seconds: float
+    wire_bytes: int = 0   # bytes on the wire (compression saves bytes - wire_bytes)
+    offset: int = 0       # start of a byte-range download
 
 
 class Download:
@@ -312,7 +331,8 @@ class Download:
         self.progress = Progress(
             name=info.get("name", ""), size=info.get("size", 0), done=info.get("done", 0),
             percent=info.get("percent", 0.0), bytes_per_sec=info.get("bytes_per_sec", 0.0),
-            eta=info.get("eta_ms", 0) / 1000.0, sources=info.get("sources", 0), streams=info.get("streams", 0))
+            eta=info.get("eta_ms", 0) / 1000.0, sources=info.get("sources", 0), streams=info.get("streams", 0),
+            window=info.get("window", 0), wire_bytes=info.get("wire_bytes", 0))
         if rc == 0:
             return False
         if rc < 0:
@@ -323,7 +343,8 @@ class Download:
                 raise
         self._result = DownloadResult(
             path=info.get("path", ""), hash=info.get("hash", ""), size=info.get("size", 0),
-            bytes=info.get("bytes", 0), resumed=info.get("resumed", 0), seconds=info.get("elapsed_ms", 0) / 1000.0)
+            bytes=info.get("bytes", 0), resumed=info.get("resumed", 0), seconds=info.get("elapsed_ms", 0) / 1000.0,
+            wire_bytes=info.get("wire_bytes", 0), offset=info.get("offset", 0))
         return True
 
     def wait(self, timeout: Optional[float] = None,
@@ -551,10 +572,17 @@ class Node:
         sides have identity keys (open the node with identity_file=...).
         attachment/file: a voice note or any file (up to 12 MiB)."""
         if file is not None:
+            if not mime:
+                mime = _mime_for(file)
+            if os.path.getsize(file) > 256 * 1024:
+                # big files are streamed from disk through the encrypted file transfer
+                out = c_void_p()
+                err = nat.ErrBox()
+                err.check(nat.lib.mk_chat_send_file(self._h, to.encode(), str(file).encode(), text.encode(),
+                                                    mime.encode(), int(dur_ms), byref(out), err.ref))
+                return ChatMessage.from_json(nat.take_json(out.value) or {})
             with open(file, "rb") as f:
                 attachment = f.read()
-            if not mime and file.lower().endswith(".wav"):
-                mime = "audio/wav"
         data = attachment or b""
         out = c_void_p()
         err = nat.ErrBox()
@@ -776,13 +804,22 @@ class Node:
         return nat.take_json(res) or {}
 
     def download_async(self, link: str, out: Optional[str] = None, *, route: Optional[str] = None,
-                       seed: bool = False, streams_per_source: int = 0, resume: bool = True) -> Download:
-        """Start a download; returns a Download to poll/wait/cancel."""
-        opts = {"seed": seed, "no_resume": not resume}
+                       seed: bool = False, streams_per_source: int = 0, resume: bool = True,
+                       max_sources: int = 0, pipeline: int = 0, max_pipeline: int = 0,
+                       offset: int = 0, length: int = 0, compression: bool = True) -> Download:
+        """Start a download; returns a Download to poll/wait/cancel.
+
+        offset/length  download only a byte range (needs a link); out gets exactly those bytes
+        pipeline       chunk requests in flight per stream (0 = adaptive to the network)
+        compression    accept compressed chunks for compressible files (default True)
+        """
+        opts: Dict[str, Any] = {"seed": seed, "no_resume": not resume, "no_compression": not compression}
         if route:
             opts["route"] = route
-        if streams_per_source:
-            opts["streams_per_source"] = streams_per_source
+        for k, v in (("streams_per_source", streams_per_source), ("max_sources", max_sources), ("pipeline", pipeline),
+                     ("max_pipeline", max_pipeline), ("offset", offset), ("length", length)):
+            if v:
+                opts[k] = v
         h = c_uint64()
         err = nat.ErrBox()
         err.check(nat.lib.mk_download_start(self._h, link.encode(), nat.b(str(out) if out else None),

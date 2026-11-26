@@ -85,7 +85,8 @@ void        mk_free(void* p);
  *   inbox_size, request_timeout_ms, heartbeat_ms, chunk_size,
  *   streams_per_source, cache_dir ("-" = off), link_relays [str],
  *   sub_buffer, slow_consumer_wait_ms, connect_timeout_ms, congestion ("cubic" default | "bbr"),
- *   profile ("max_throughput"|"low_latency"|"realtime"|"scavenger"), log (bool)
+ *   profile ("max_throughput"|"low_latency"|"realtime"|"scavenger"), log (bool),
+ *   pipeline (chunk requests in flight per stream, 0 = adaptive), no_compression (bool)
  * identity and secure chat:
  *   identity_file     Ed25519 identity key, created if missing ("~/..." allowed).
  *                     Relays bind the node id to it; chat is signed and encrypted with it.
@@ -120,6 +121,12 @@ int mk_chat_send(mk_node node, const char* to, const char* text, const void* att
  *       | "safety" (out_json = {"peer","safety_number"}) | "contact" (out_json = state)
  *       | "expect" (peer = "node=FINGERPRINT", e.g. from a key= address) */
 int mk_chat_contact(mk_node node, const char* action, const char* peer, char** out_json, char** err);
+/* send any file from disk (up to 4 GiB): big files are encrypted with a fresh key, shared
+ * through the file engine (chunked, resumable, peer to peer when possible) and the sealed
+ * message carries the link and key. The receiver gets MK_KIND_CHAT kind "file" twice:
+ * "pending": true while downloading, then with "path" set once verified. */
+int mk_chat_send_file(mk_node node, const char* to, const char* path, const char* caption,
+                      const char* mime, int dur_ms, char** out_json, char** err);
 
 /* ---------- messaging ---------- */
 int mk_send(mk_node node, const char* to, const void* data, int len,
@@ -183,11 +190,15 @@ char* mk_find_providers(mk_node node, const char* hash, char** err);  /* JSON, f
 
 /* Start a download of a magnetk link or 64-char hash. out = file, directory
  * or NULL (current directory). opts_json (optional): {route, seed,
- * streams_per_source, no_resume, max_sources}. */
+ * streams_per_source, no_resume, max_sources,
+ * pipeline (chunk requests in flight per stream; 0 = adaptive), max_pipeline,
+ * offset, length (byte range: only those bytes are fetched and written; needs a link),
+ * no_compression (do not ask for compressed chunks)}. */
 int  mk_download_start(mk_node node, const char* link, const char* out,
                        const char* opts_json, mk_download* dl, char** err);
 /* Wait up to timeout_ms; *progress_json (free) = {name, size, done, percent,
- * bytes_per_sec, eta_ms, sources, streams, finished, path?, hash?, ...}.
+ * bytes_per_sec, eta_ms, sources, streams, window, wire_bytes, finished,
+ * path?, hash?, bytes?, resumed?, wire_bytes?, offset?, ...}.
  * Returns 0 while running, 1 when finished OK, or an error code. */
 int  mk_download_poll(mk_download dl, int timeout_ms, char** progress_json, char** err);
 int  mk_download_cancel(mk_download dl);

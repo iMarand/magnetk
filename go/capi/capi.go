@@ -146,6 +146,8 @@ type nodeJSON struct {
 	CacheDir         string   `json:"cache_dir"`
 	LinkRelays       []string `json:"link_relays"`
 	ConnectTimeoutMs int      `json:"connect_timeout_ms"`
+	Pipeline         int      `json:"pipeline"`       // chunk requests in flight per stream (0 = adaptive)
+	NoCompression    bool     `json:"no_compression"` // do not compress served chunks / ask for compressed ones
 	Congestion       string   `json:"congestion"`
 	Profile          string   `json:"profile"`
 	Log              bool     `json:"log"`
@@ -185,6 +187,7 @@ func mk_node_open(configJSON *C.char, out *C.uint64_t, errOut **C.char) C.int {
 		SlowConsumerWait: time.Duration(j.SlowWaitMs) * time.Millisecond,
 		RequestTimeout:   time.Duration(j.RequestTimeoutMs) * time.Millisecond,
 		ChunkSize:        j.ChunkSize, StreamsPerSource: j.StreamsPerSource, CacheDir: j.CacheDir,
+		Pipeline: j.Pipeline, NoCompression: j.NoCompression,
 		LinkRelays: j.LinkRelays,
 		QUIC:       transport.Config{Congestion: transport.ParseCongestion(j.Congestion), Profile: transport.ParseProfile(j.Profile)},
 	}
@@ -728,6 +731,11 @@ type downloadJSON struct {
 	StreamsPerSource int    `json:"streams_per_source"`
 	NoResume         bool   `json:"no_resume"`
 	MaxSources       int    `json:"max_sources"`
+	Pipeline         int    `json:"pipeline"`       // 0 = adaptive
+	MaxPipeline      int    `json:"max_pipeline"`   // adaptive upper bound
+	Offset           int64  `json:"offset"`         // byte range start
+	Length           int64  `json:"length"`         // byte range length (0 = to the end)
+	NoCompression    bool   `json:"no_compression"` // do not ask for compressed chunks
 }
 
 //export mk_download_start
@@ -759,6 +767,7 @@ func mk_download_start(h C.uint64_t, link, out, optsJSON *C.char, dl *C.uint64_t
 		defer close(d.done)
 		res, err := nh.n.Download(ctx, target, outPath, &node.DownloadOptions{
 			Route: node.Route(o.Route), Seed: o.Seed, StreamsPerSource: o.StreamsPerSource, NoResume: o.NoResume, MaxSources: o.MaxSources,
+			Pipeline: o.Pipeline, MaxPipeline: o.MaxPipeline, Offset: o.Offset, Length: o.Length, NoCompression: o.NoCompression,
 			Progress: func(p files.Progress) {
 				d.mu.Lock()
 				d.progress = p
@@ -768,8 +777,8 @@ func mk_download_start(h C.uint64_t, link, out, optsJSON *C.char, dl *C.uint64_t
 		d.mu.Lock()
 		d.result, d.err = res, err
 		if res != nil {
-			d.progress.Done = res.Manifest.Size
-			d.progress.Size = res.Manifest.Size
+			d.progress.Done = res.Bytes + res.Resumed
+			d.progress.Size = res.Bytes + res.Resumed
 		}
 		d.mu.Unlock()
 	}()
@@ -802,13 +811,16 @@ func mk_download_poll(dl C.uint64_t, timeoutMs C.int, progressJSON **C.char, err
 	d.mu.Unlock()
 	if progressJSON != nil {
 		m := map[string]any{"name": p.Name, "size": p.Size, "done": p.Done, "percent": p.Percent(), "bytes_per_sec": p.BytesPerSec,
-			"eta_ms": p.ETA.Milliseconds(), "sources": p.Sources, "streams": p.Streams, "finished": finished}
+			"eta_ms": p.ETA.Milliseconds(), "sources": p.Sources, "streams": p.Streams, "window": p.Window,
+			"wire_bytes": p.WireBytes, "finished": finished}
 		if res != nil {
 			m["path"] = res.Path
 			m["hash"] = res.Manifest.Hash
 			m["bytes"] = res.Bytes
 			m["resumed"] = res.Resumed
 			m["elapsed_ms"] = res.Elapsed.Milliseconds()
+			m["wire_bytes"] = res.WireBytes
+			m["offset"] = res.Offset
 		}
 		*progressJSON = cJSON(m)
 	}

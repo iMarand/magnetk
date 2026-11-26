@@ -134,6 +134,7 @@ struct Api {
     int (*identity)(uint64_t, char**, char**);
     int (*chat_send)(uint64_t, const char*, const char*, const void*, int, const char*, int, char**, char**);
     int (*chat_contact)(uint64_t, const char*, const char*, char**, char**);
+    int (*chat_send_file)(uint64_t, const char*, const char*, const char*, const char*, int, char**, char**);
 
     static Api& get() {
         static Api api = load();
@@ -209,6 +210,7 @@ private:
         bind(a.relay_start, "mk_relay_start"); bind(a.relay_port, "mk_relay_port");
         bind(a.relay_stats_json, "mk_relay_stats_json"); bind(a.relay_close, "mk_relay_close");
         bind(a.identity, "mk_identity"); bind(a.chat_send, "mk_chat_send"); bind(a.chat_contact, "mk_chat_contact");
+        bind(a.chat_send_file, "mk_chat_send_file");
         return a;
     }
 };
@@ -353,12 +355,40 @@ struct Progress {
     int64_t size = 0, done = 0;
     double percent = 0, bytes_per_sec = 0, eta_seconds = 0;
     int sources = 0, streams = 0;
+    int window = 0;          ///< chunk requests in flight (adaptive)
+    int64_t wire_bytes = 0;  ///< bytes on the wire (less than done when compressed)
 };
 
 struct DownloadResult {
     std::string path, hash;
     int64_t size = 0, bytes = 0, resumed = 0;
     double seconds = 0;
+    int64_t wire_bytes = 0;  ///< bytes on the wire (compression saves bytes - wire_bytes)
+    int64_t offset = 0;      ///< start of a byte-range download
+};
+
+/// Download options (all optional).
+struct DownloadOptions {
+    std::string route;          ///< auto | direct | relay
+    bool seed = false;          ///< keep sharing the file afterwards
+    bool resume = true;
+    int streams_per_source = 0;
+    int max_sources = 0;
+    int pipeline = 0;           ///< chunk requests in flight per stream (0 = adaptive)
+    int max_pipeline = 0;
+    int64_t offset = 0;         ///< byte range start (needs a link)
+    int64_t length = 0;         ///< byte range length (0 = to the end)
+    bool compression = true;    ///< accept compressed chunks
+
+    std::string to_json() const {
+        std::string j = std::string("{\"seed\":") + (seed ? "true" : "false") + ",\"no_resume\":" + (resume ? "false" : "true") +
+                        ",\"no_compression\":" + (compression ? "false" : "true");
+        if (!route.empty()) j += ",\"route\":" + detail::json_escape(route);
+        auto i = [&](const char* k, long long v) { if (v) j += std::string(",\"") + k + "\":" + std::to_string(v); };
+        i("streams_per_source", streams_per_source); i("max_sources", max_sources); i("pipeline", pipeline);
+        i("max_pipeline", max_pipeline); i("offset", offset); i("length", length);
+        return j + "}";
+    }
 };
 
 /// Node options (see magnetk.h for every key).
@@ -392,6 +422,8 @@ struct NodeOptions {
     std::string known_peers_file;      ///< pinned keys / contacts (default next to identity_file)
     bool chat_require_approval = false;   ///< strangers arrive as requests until chat_allow
     bool chat_require_encryption = false; ///< refuse unencrypted chat
+    int pipeline = 0;                  ///< chunk requests in flight per stream (0 = adaptive)
+    bool no_compression = false;       ///< do not compress served chunks / ask for compressed ones
 
     std::string to_json() const {
         using detail::json_escape;
@@ -407,6 +439,7 @@ struct NodeOptions {
         s("congestion", congestion); b("log", log);
         s("identity_file", identity_file); s("chat_dir", chat_dir); s("known_peers_file", known_peers_file);
         b("chat_require_approval", chat_require_approval); b("chat_require_encryption", chat_require_encryption);
+        i("pipeline", pipeline); b("no_compression", no_compression);
         if (!advertise.empty()) j += ",\"advertise\":" + detail::json_array(advertise);
         if (!link_relays.empty()) j += ",\"link_relays\":" + detail::json_array(link_relays);
         return j + "}";
@@ -657,6 +690,13 @@ public:
                                       static_cast<int>(attachment.size()), mime.c_str(), dur_ms, &out, &err), &err);
         return detail::take(out);
     }
+    /// Sends any file (streamed from disk; big files go through the encrypted file transfer).
+    std::string chat_send_file(const std::string& to, const std::string& path, const std::string& caption = "",
+                               const std::string& mime = "", int dur_ms = 0) {
+        char* out = nullptr; char* err = nullptr;
+        detail::check(api().chat_send_file(h_, to.c_str(), path.c_str(), caption.c_str(), mime.c_str(), dur_ms, &out, &err), &err);
+        return detail::take(out);
+    }
     void chat_allow(const std::string& peer) { contact("allow", peer); }
     void chat_block(const std::string& peer) { contact("block", peer); }
     void mark_verified(const std::string& peer) { contact("verified", peer); }
@@ -684,9 +724,15 @@ public:
     DownloadResult download(const std::string& link, const std::string& out = "",
                             const std::function<void(const Progress&)>& progress = nullptr,
                             const std::string& route = "", bool seed = false) {
-        std::string opts = "{\"seed\":" + std::string(seed ? "true" : "false");
-        if (!route.empty()) opts += ",\"route\":" + detail::json_escape(route);
-        opts += "}";
+        DownloadOptions o;
+        o.route = route;
+        o.seed = seed;
+        return download(link, out, o, progress);
+    }
+    /// Download with all options: byte ranges, compression, adaptive pipeline, ...
+    DownloadResult download(const std::string& link, const std::string& out, const DownloadOptions& o,
+                            const std::function<void(const Progress&)>& progress = nullptr) {
+        std::string opts = o.to_json();
         uint64_t dl = 0; char* err = nullptr;
         detail::check(api().download_start(h_, link.c_str(), out.empty() ? nullptr : out.c_str(), opts.c_str(), &dl, &err), &err);
         struct Guard { uint64_t d; ~Guard() { detail::Api::get().download_free(d); } } guard{dl};
@@ -704,6 +750,8 @@ public:
                 p.eta_seconds = detail::json_num(js, "eta_ms") / 1000.0;
                 p.sources = static_cast<int>(detail::json_num(js, "sources"));
                 p.streams = static_cast<int>(detail::json_num(js, "streams"));
+                p.window = static_cast<int>(detail::json_num(js, "window"));
+                p.wire_bytes = static_cast<int64_t>(detail::json_num(js, "wire_bytes"));
                 progress(p);
             }
             detail::check(rc, &err);
@@ -714,6 +762,8 @@ public:
                 r.bytes = static_cast<int64_t>(detail::json_num(js, "bytes"));
                 r.resumed = static_cast<int64_t>(detail::json_num(js, "resumed"));
                 r.seconds = detail::json_num(js, "elapsed_ms") / 1000.0;
+                r.wire_bytes = static_cast<int64_t>(detail::json_num(js, "wire_bytes"));
+                r.offset = static_cast<int64_t>(detail::json_num(js, "offset"));
                 return r;
             }
         }

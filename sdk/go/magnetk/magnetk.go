@@ -309,6 +309,16 @@ const (
 	TrustInvalid  = identity.TrustInvalid
 )
 
+// Chat message kinds.
+const (
+	ChatKindText  = chat.KindText
+	ChatKindAudio = chat.KindAudio
+	ChatKindFile  = chat.KindFile // attachment sent through the encrypted file transfer (SendFile)
+	ChatKindAck   = chat.KindAck
+	// ChatInlineLimit: attachments above it are sent as files automatically.
+	ChatInlineLimit = chat.InlineLimit
+)
+
 var (
 	ErrKeyChanged   = chat.ErrKeyChanged
 	ErrNotEncrypted = chat.ErrNotEncrypted

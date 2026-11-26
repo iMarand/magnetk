@@ -129,6 +129,7 @@ _sig("mk_relay_close", c_int, c_uint64)
 _sig("mk_identity", c_int, c_uint64, POINTER(c_void_p), ERR)
 _sig("mk_chat_send", c_int, c_uint64, c_char_p, c_char_p, c_char_p, c_int, c_char_p, c_int, POINTER(c_void_p), ERR)
 _sig("mk_chat_contact", c_int, c_uint64, c_char_p, c_char_p, POINTER(c_void_p), ERR)
+_sig("mk_chat_send_file", c_int, c_uint64, c_char_p, c_char_p, c_char_p, c_char_p, c_int, POINTER(c_void_p), ERR)
 
 
 # ---------- helpers ----------

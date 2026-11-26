@@ -152,6 +152,29 @@ chunk requests), verify every chunk and the whole file, write to
 `<name>.mkpart` and resume after interruption. Use `listen=True` on
 seeders so downloaders can connect directly.
 
+```python
+part = other.download(link, "preview.bin", offset=100 << 20, length=8 << 20)   # 8 MB from 100 MB
+res = other.download(link, "out/", compression=False, pipeline=8, max_sources=4)
+print(res.wire_bytes, res.bytes)        # compression savings
+```
+
+**Adaptive, compressed, partial**
+
+* **Adaptive pipeline:** with `pipeline=0` (the default), each stream measures its throughput
+  and keeps more chunk requests in flight while that improves (up to `max_pipeline`, 32).
+  It backs off when throughput drops, so fast links fill up and slow or unstable ones
+  are not flooded. `progress.window` shows how many requests are in flight.
+* **Compression on the fly:** compressible files (text, CSV, JSON, logs, raw images or
+  audio) are sent deflated, while already compressed formats are detected and sent as
+  they are. Chunk hashes cover the original bytes, so verification does not change.
+  `wire_bytes` shows what actually crossed the network. Turn it off per download or
+  per node (`COMPRESSION=false`).
+* **Byte ranges:** `offset` and `length` fetch only the chunks covering the range (each
+  one verified) and write exactly those bytes. This is useful for previews, seeking in
+  media, or resuming at an exact position. It needs a link, because the link carries
+  the manifest root.
+
+
 ## Relay
 
 ```python
@@ -216,7 +239,7 @@ def on_chat(m: magnetk.ChatMessage):
 
 alice.on_chat(on_chat)                     # or: m = alice.chat_receive(timeout=5)
 alice.chat_send("bob", "hello")            # end-to-end encrypted and signed
-alice.chat_send("bob", "listen", file="note.wav")
+alice.chat_send("bob", "listen", file="note.m4a")       # big files go through the encrypted file transfer
 print(alice.safety_number("bob"))          # compare with bob once, then:
 alice.mark_verified("bob")
 ```

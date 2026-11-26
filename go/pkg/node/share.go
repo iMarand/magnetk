@@ -151,12 +151,27 @@ func (n *Node) FindProviders(ctx context.Context, hash string) (*Providers, erro
 // DownloadOptions configures Download.
 type DownloadOptions struct {
 	Progress         func(files.Progress)
-	StreamsPerSource int  // default from Config
-	Pipeline         int  // outstanding chunk requests per stream (default 4)
-	MaxSources       int  // default 8
-	NoResume         bool // ignore/keep no partial state
-	Seed             bool // keep sharing the file after the download
-	Route            Route
+	StreamsPerSource int // default from Config
+	// Pipeline: chunk requests in flight per stream; 0 = Config.Pipeline,
+	// which defaults to adaptive.
+	Pipeline    int
+	MaxPipeline int  // adaptive upper bound (default 32)
+	MaxSources  int  // default 8
+	NoResume    bool // ignore/keep no partial state
+	Seed        bool // keep sharing the file after the download
+	Route       Route
+	// Offset and Length download only a byte range (needs a link with a
+	// manifest root); out receives exactly those bytes. 0, 0 = whole file.
+	Offset int64
+	Length int64
+	// NoCompression: do not ask for compressed chunks (default from Config).
+	NoCompression bool
+}
+
+func newStore(noCompression bool) *files.Store {
+	s := files.NewStore()
+	s.NoCompression = noCompression
+	return s
 }
 
 // Download fetches the file described by a magnetk link (or a bare 64-char
@@ -212,6 +227,10 @@ func (n *Node) Download(ctx context.Context, linkOrHash, out string, opts *Downl
 	}
 
 	root := ml.ManifestRoot
+	pipeline := opts.Pipeline
+	if pipeline == 0 {
+		pipeline = n.cfg.Pipeline
+	}
 	streams := opts.StreamsPerSource
 	if streams == 0 {
 		streams = n.cfg.StreamsPerSource
@@ -221,8 +240,12 @@ func (n *Node) Download(ctx context.Context, linkOrHash, out string, opts *Downl
 		Root:             root,
 		Out:              outPath,
 		StreamsPerSource: streams,
-		Pipeline:         opts.Pipeline,
+		Pipeline:         pipeline,
+		MaxPipeline:      opts.MaxPipeline,
 		MaxSources:       opts.MaxSources,
+		Offset:           opts.Offset,
+		Length:           opts.Length,
+		NoCompression:    opts.NoCompression || n.cfg.NoCompression,
 		Resume:           !opts.NoResume,
 		Progress:         opts.Progress,
 		Logger:           n.log,
@@ -230,7 +253,7 @@ func (n *Node) Download(ctx context.Context, linkOrHash, out string, opts *Downl
 	if err != nil {
 		return nil, err
 	}
-	if opts.Seed {
+	if opts.Seed && opts.Offset == 0 && opts.Length == 0 {
 		if _, err := n.ShareManifest(ctx, res.Path, res.Manifest); err != nil {
 			n.log.Printf("[node] seeding %s failed: %v", res.Path, err)
 		}

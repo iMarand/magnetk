@@ -49,6 +49,12 @@ ciphertext = AES-256-GCM(key, nonce, inner message, aad = id|from|to|time)
 signature  = Ed25519(sender, every header field including SHA-256(ciphertext))
 ```
 
+**Files and long voice notes** (over 256 KB) are encrypted with a fresh
+random key (AES-256-GCM in 1 MiB segments whose order and end are
+authenticated) and shared through the file engine. Only the sealed message
+carries the link, the key and the SHA-256. Anyone who obtains the link gets
+ciphertext.
+
 Before the first message, the two engines exchange signed key bundles
 through a direct request. The relay routes it by node id, and the relay has
 bound that id to its key. Old software without keys still works: messages to

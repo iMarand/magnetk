@@ -107,6 +107,18 @@ int main() {
         a.close();
         b.close();
         CHECK(alice.providers_json(shared.hash).find(bob2.id()) != std::string::npos, "find providers");
+        {
+            magnetk::DownloadOptions ro;
+            ro.offset = 1000003;
+            ro.length = 500000;
+            auto rr = alice.download(shared.link, "cpp_sdk_range.bin", ro);
+            std::ifstream r("cpp_sdk_range.bin", std::ios::binary);
+            std::stringstream sr;
+            sr << r.rdbuf();
+            r.close();
+            CHECK(rr.offset == 1000003 && sr.str() == sa.str().substr(1000003, 500000), "byte-range download");
+            std::remove("cpp_sdk_range.bin");
+        }
         bob2.unshare(shared.hash);
         std::remove(src);
         std::remove("cpp_sdk_out.bin");

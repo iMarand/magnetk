@@ -149,6 +149,10 @@ magnetk diag client -relay ... -wait                        # wait for host comm
 
 ## Chat and voice notes
 
+Voice notes are recorded as AAC (about 4 KB per second, roughly 8 times smaller
+than WAV). Notes over 256 KB go through the encrypted file transfer, which
+is resumable, peer to peer when possible, and does not block other messages.
+
 Chat is end-to-end encrypted (the PC host, `magnetk chat` and the phone
 exchange keys automatically). Each bubble shows encrypted or NOT encrypted
 and who signed it ("verified", "new key ... saved", or a red KEY CHANGED or

@@ -54,6 +54,13 @@ const (
 	TChunkReq    uint8 = 0xA2
 	TChunkData   uint8 = 0xA3
 	TFileError   uint8 = 0xA4
+	TChunkDataZ  uint8 = 0xA5 // deflate-compressed chunk: index u32, raw length u32, data
+)
+
+// ChunkReq flags.
+const (
+	// ChunkAcceptCompressed: the requester decodes TChunkDataZ.
+	ChunkAcceptCompressed uint8 = 1
 )
 
 // HELLO flags.
@@ -717,12 +724,16 @@ func DecodeManifestRes(b []byte) (m ManifestRes, err error) {
 type ChunkReq struct {
 	Hash    string
 	Indices []uint32
+	Flags   uint8 // ChunkAccept* (2.1+)
 }
 
 func (m *ChunkReq) Encode() []byte {
-	e := NewEnc(TChunkReq, 4+len(m.Hash)+4*len(m.Indices)).Str(m.Hash).U32(uint32(len(m.Indices)))
+	e := NewEnc(TChunkReq, 5+len(m.Hash)+4*len(m.Indices)).Str(m.Hash).U32(uint32(len(m.Indices)))
 	for _, i := range m.Indices {
 		e.U32(i)
+	}
+	if m.Flags != 0 { // appended in 2.1; older providers ignore it
+		e.U8(m.Flags)
 	}
 	return e.Frame()
 }
@@ -738,7 +749,23 @@ func DecodeChunkReq(b []byte) (m ChunkReq, err error) {
 	for i := 0; i < n && d.Err() == nil; i++ {
 		m.Indices = append(m.Indices, d.U32())
 	}
+	if d.Err() == nil && d.Remaining() > 0 {
+		m.Flags = d.U8()
+	}
 	return m, d.Err()
+}
+
+// ChunkDataZHeader is the header of a compressed chunk frame carrying n
+// compressed bytes of a chunk whose raw length is rawLen.
+func ChunkDataZHeader(index uint32, rawLen, n int) []byte {
+	var h [HeaderSize + 8]byte
+	l := uint32(8 + n)
+	h[0], h[1], h[2], h[3] = byte(l>>24), byte(l>>16), byte(l>>8), byte(l)
+	h[4] = TChunkDataZ
+	h[5], h[6], h[7], h[8] = byte(index>>24), byte(index>>16), byte(index>>8), byte(index)
+	r := uint32(rawLen)
+	h[9], h[10], h[11], h[12] = byte(r>>24), byte(r>>16), byte(r>>8), byte(r)
+	return h[:]
 }
 
 // ChunkDataHeader returns the frame header + index for a chunk of n bytes;

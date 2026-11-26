@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/iMarand/magnetk/go/pkg/magnetk"
+	"github.com/iMarand/magnetk/go/pkg/node"
 )
 
 // The relay/seed/peer binaries keep their Magnetk v1 flags so existing
@@ -133,7 +134,7 @@ func PeerCompat(args []string) int {
 		return 2
 	}
 	l.apply()
-	if err := download(l.nf, target, *output, *seed, 0, false); err != nil {
+	if err := download(l.nf, target, *output, node.DownloadOptions{Seed: *seed}); err != nil {
 		fmt.Fprintln(os.Stderr, "peer:", err)
 		return 1
 	}

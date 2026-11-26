@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -50,21 +50,22 @@ type Box struct {
 	pins   *identity.Pins
 	policy Policy
 
-	mu     sync.Mutex
-	sent   map[string]hrtime.Time // outgoing id -> send time
-	hist   []Msg
-	last   string            // peer of the last chat (default recipient)
-	peerX  map[string]string // node -> verified X25519 key (base64)
-	held   map[string][]string
-	seenFP map[string]string    // node -> last fingerprint seen (for AcceptKey)
-	noKeys map[string]time.Time // node -> when it last failed to answer the key exchange
+	mu       sync.Mutex
+	sent     map[string]hrtime.Time // outgoing id -> send time
+	hist     []Msg
+	last     string            // peer of the last chat (default recipient)
+	peerX    map[string]string // node -> verified X25519 key (base64)
+	held     map[string][]string
+	seenFP   map[string]string    // node -> last fingerprint seen (for AcceptKey)
+	noKeys   map[string]time.Time // node -> when it last failed to answer the key exchange
+	outFiles map[string]outgoingFile
 }
 
 // NewBox creates a box for node id self; attachments are saved in dir.
 // on is called for every incoming message and ack, and must not block.
 func NewBox(self, dir string, n func() *node.Node, on func(Msg)) *Box {
 	return &Box{self: self, dir: dir, node: n, on: on, sent: map[string]hrtime.Time{},
-		peerX: map[string]string{}, held: map[string][]string{}, seenFP: map[string]string{}, noKeys: map[string]time.Time{}}
+		peerX: map[string]string{}, held: map[string][]string{}, seenFP: map[string]string{}, noKeys: map[string]time.Time{}, outFiles: map[string]outgoingFile{}}
 }
 
 // SetIdentity makes the box sign and encrypt with key and check what it
@@ -105,6 +106,11 @@ func (b *Box) Allow(peer string) {
 	delete(b.held, peer)
 	b.mu.Unlock()
 	for _, id := range ids {
+		if m, ok := b.Get(id); ok && m.Kind == KindFile && m.Path == "" {
+			m.Request = false
+			go b.fetchFile(m) // acks once the file arrived
+			continue
+		}
 		b.sendAck(peer, id)
 	}
 }
@@ -232,8 +238,20 @@ func (b *Box) Send(ctx context.Context, to, text, mime string, durMs int, att []
 	if n == nil {
 		return Msg{}, errors.New("not connected")
 	}
-	if len(att) > MaxAttachment {
-		return Msg{}, fmt.Errorf("attachment too large (%s, max %s)", fmtSize(len(att)), fmtSize(MaxAttachment))
+	if len(att) > InlineLimit {
+		// big attachments go through the file engine: chunked, resumable,
+		// peer to peer when possible, and they do not block other messages
+		f, err := os.CreateTemp(b.outboxDir(), "att-*"+extFor(mime))
+		if err != nil {
+			return Msg{}, err
+		}
+		_, err = f.Write(att)
+		f.Close()
+		defer os.Remove(f.Name())
+		if err != nil {
+			return Msg{}, err
+		}
+		return b.SendFile(ctx, to, f.Name(), text, mime, durMs)
 	}
 	b.mu.Lock()
 	if to == "" {
@@ -356,6 +374,7 @@ func (b *Box) Handle(from string, data []byte) {
 			b.on(m) // reported, but it does not confirm delivery
 			return
 		}
+		b.dropOutgoing(m.Text) // a sent file was received: stop sharing it
 		b.mu.Lock()
 		if t0, ok := b.sent[m.Text]; ok {
 			m.RTTMs = round2(float64(hrtime.Since(t0).Microseconds()) / 1000)
@@ -383,6 +402,22 @@ func (b *Box) Handle(from string, data []byte) {
 	}
 	if policy.RequireEncryption && !m.Encrypted {
 		m.Request = true
+	}
+	if m.Kind == KindFile {
+		b.mu.Lock()
+		b.add(m)
+		if m.Request {
+			b.held[from] = append(b.held[from], m.ID)
+		} else {
+			b.last = from
+		}
+		b.mu.Unlock()
+		if m.Request {
+			b.on(m) // shown as a request; fetched only after Allow
+		} else {
+			go b.fetchFile(m)
+		}
+		return
 	}
 	SaveAttachment(b.dir, &m, att)
 	b.mu.Lock()

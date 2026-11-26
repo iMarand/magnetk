@@ -101,16 +101,33 @@ func GetMain(args []string) error {
 	seed := nf.fs.Bool("seed", false, "keep sharing the file after downloading")
 	streams := nf.fs.Int("streams", 0, "parallel streams per provider")
 	noResume := nf.fs.Bool("no-resume", false, "ignore partial downloads")
+	offset := nf.fs.String("offset", "", "download only a byte range starting here (e.g. 100MB); needs a link")
+	length := nf.fs.String("length", "", "length of the byte range (default: to the end)")
+	noCompress := nf.fs.Bool("no-compress", false, "do not ask for compressed chunks")
+	pipeline := nf.fs.Int("pipeline", 0, "chunk requests in flight per stream (0 = adaptive)")
 	if err := nf.parse(args); err != nil {
 		return err
 	}
 	if nf.fs.NArg() != 1 {
 		return fmt.Errorf("usage: magnetk get [flags] <link|hash>")
 	}
-	return download(nf, nf.fs.Arg(0), *out, *seed, *streams, *noResume)
+	do := node.DownloadOptions{Seed: *seed, StreamsPerSource: *streams, NoResume: *noResume, NoCompression: *noCompress, Pipeline: *pipeline}
+	var err error
+	if *offset != "" {
+		if do.Offset, err = parseSize(*offset); err != nil {
+			return fmt.Errorf("-offset: %w", err)
+		}
+	}
+	if *length != "" {
+		if do.Length, err = parseSize(*length); err != nil {
+			return fmt.Errorf("-length: %w", err)
+		}
+	}
+	return download(nf, nf.fs.Arg(0), *out, do)
 }
 
-func download(nf *nodeFlags, linkOrHash, out string, seed bool, streams int, noResume bool) error {
+func download(nf *nodeFlags, linkOrHash, out string, do node.DownloadOptions) error {
+	seed := do.Seed
 	var linkRelays []string
 	if ml, err := magnetk.Parse(linkOrHash); err == nil {
 		linkRelays = ml.Relays
@@ -125,22 +142,18 @@ func download(nf *nodeFlags, linkOrHash, out string, seed bool, streams int, noR
 
 	fmt.Printf("Connected to relay %s via %s\n", n.Info().RelayID, n.Info().Protocol)
 	lastLen := 0
-	res, err := n.Download(ctx, linkOrHash, out, &node.DownloadOptions{
-		Seed:             seed,
-		StreamsPerSource: streams,
-		NoResume:         noResume,
-		Progress: func(p files.Progress) {
-			line := fmt.Sprintf("\r%s  %5.1f%%  %s / %s  %s/s  ETA %s  [%d source(s), %d stream(s)]",
-				p.Name, p.Percent(), humanBytes(float64(p.Done)), humanBytes(float64(p.Size)),
-				humanBytes(p.BytesPerSec), p.ETA.Round(time.Second), p.Sources, p.Streams)
-			pad := lastLen - len(line)
-			lastLen = len(line)
-			if pad > 0 {
-				line += strings.Repeat(" ", pad)
-			}
-			fmt.Print(line)
-		},
-	})
+	do.Progress = func(p files.Progress) {
+		line := fmt.Sprintf("\r%s  %5.1f%%  %s / %s  %s/s  ETA %s  [%d source(s), %d stream(s), window %d]",
+			p.Name, p.Percent(), humanBytes(float64(p.Done)), humanBytes(float64(p.Size)),
+			humanBytes(p.BytesPerSec), p.ETA.Round(time.Second), p.Sources, p.Streams, p.Window)
+		pad := lastLen - len(line)
+		lastLen = len(line)
+		if pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+		fmt.Print(line)
+	}
+	res, err := n.Download(ctx, linkOrHash, out, &do)
 	fmt.Println()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -153,13 +166,21 @@ func download(nf *nodeFlags, linkOrHash, out string, seed bool, streams int, noR
 	if res.Resumed > 0 {
 		fmt.Printf(", %s resumed", humanBytes(float64(res.Resumed)))
 	}
+	if res.WireBytes > 0 && res.WireBytes < res.Bytes*9/10 {
+		fmt.Printf(", %s on the wire: compression saved %.0f%%", humanBytes(float64(res.WireBytes)), 100-100*float64(res.WireBytes)/float64(res.Bytes))
+	}
 	fmt.Println(")")
+	if do.Offset != 0 || do.Length != 0 {
+		fmt.Printf("Range: bytes %d-%d of the file, every chunk verified\n", res.Offset, res.Offset+res.Bytes+res.Resumed-1)
+	}
 	if len(res.PerSource) > 1 {
 		for src, b := range res.PerSource {
 			fmt.Printf("  from %-24s %s\n", src, humanBytes(float64(b)))
 		}
 	}
-	fmt.Printf("Verified SHA-256 %s\n", res.Manifest.Hash)
+	if do.Offset == 0 && do.Length == 0 {
+		fmt.Printf("Verified SHA-256 %s\n", res.Manifest.Hash)
+	}
 	if seed {
 		fmt.Println("Seeding. Press Ctrl+C to stop.")
 		<-ctx.Done()

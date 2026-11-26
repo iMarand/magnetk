@@ -85,10 +85,16 @@ type Config struct {
 	HeartbeatTimeout  time.Duration
 
 	// Files
-	ChunkSize        int64    // 0 = automatic
-	StreamsPerSource int      // parallel streams per provider (default 4)
-	CacheDir         string   // manifest cache ("" = user cache dir, "-" = off)
-	LinkRelays       []string // relays written into share links (default Relays)
+	ChunkSize        int64 // 0 = automatic
+	StreamsPerSource int   // parallel streams per provider (default 4)
+	// Pipeline is the number of chunk requests in flight per stream
+	// (0 = adaptive, tuned by measured throughput).
+	Pipeline int
+	// NoCompression stops this node from compressing chunks it serves and
+	// from asking providers for compressed chunks.
+	NoCompression bool
+	CacheDir      string   // manifest cache ("" = user cache dir, "-" = off)
+	LinkRelays    []string // relays written into share links (default Relays)
 
 	Logger *log.Logger
 	// OnEvent is called for connection state changes (from a background

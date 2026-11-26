@@ -31,6 +31,7 @@ import (
 func ChatMain(args []string) error {
 	nf := newNodeFlags("chat")
 	audio := nf.fs.String("audio", "", "send this file as a voice note / attachment")
+	file := nf.fs.String("file", "", "send any file (big files go through the encrypted file transfer)")
 	mimeType := nf.fs.String("mime", "", "attachment type (default from the file extension)")
 	interactive := nf.fs.Bool("i", false, "interactive: keep the chat open (default when no message is given)")
 	wait := nf.fs.Duration("wait", 0, "after sending, keep printing replies for this long")
@@ -97,6 +98,9 @@ func ChatMain(args []string) error {
 
 	ctx := context.Background()
 	sent := false
+	if *file != "" && *audio == "" {
+		*audio = *file
+	}
 	if *audio != "" {
 		if err := s.sendFile(ctx, target, *audio, *mimeType, text); err != nil {
 			return err
@@ -237,6 +241,20 @@ func (s *chatSession) onMsg(m chat.Msg) {
 			return
 		}
 		s.printf("%s   ✓ %s got it (round trip %.1f ms)\n", ts, m.From, m.RTTMs)
+	case chat.KindFile:
+		if m.Pending {
+			s.printf("%s %s is sending %s (%s), receiving...%s\n", ts, m.From, m.Name, humanBytes(float64(m.Size)), trustNote(m))
+			return
+		}
+		line := fmt.Sprintf("%s %s: [%s]", ts, m.From, chat.Summary(m))
+		if m.Text != "" {
+			line += " " + m.Text
+		}
+		line += trustNote(m)
+		if m.Path != "" {
+			line += "\n         saved to " + m.Path
+		}
+		s.printf("%s\n", line)
 	case chat.KindAudio:
 		line := fmt.Sprintf("%s %s: [%s]", ts, m.From, chat.Summary(m))
 		if m.Text != "" {
@@ -268,23 +286,49 @@ func (s *chatSession) sendText(ctx context.Context, to, text string) error {
 }
 
 func (s *chatSession) sendFile(ctx context.Context, to, path, mimeType, caption string) error {
-	data, err := os.ReadFile(path)
+	st, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	if mimeType == "" {
-		mimeType = mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
-		if mimeType == "" || strings.HasSuffix(strings.ToLower(path), ".wav") {
-			mimeType = "audio/wav"
-		}
+		mimeType = mimeFor(path)
 	}
-	m, err := s.box.Send(ctx, to, caption, mimeType, chat.WAVDurationMs(data), data)
+	var m chat.Msg
+	if st.Size() > chat.InlineLimit {
+		// streamed from disk: encrypted, shared, fetched by the receiver
+		s.printf("sending %s (%s) through the encrypted file transfer...\n", filepath.Base(path), humanBytes(float64(st.Size())))
+		m, err = s.box.SendFile(ctx, to, path, caption, mimeType, 0)
+	} else {
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		m, err = s.box.Send(ctx, to, caption, mimeType, chat.WAVDurationMs(data), data)
+	}
 	if err != nil {
 		return fmt.Errorf("send to %s: %w", to, err)
 	}
 	s.track(m.ID)
 	s.printf("sent %s (%s)\n", filepath.Base(path), chat.Summary(m))
 	return nil
+}
+
+func mimeFor(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".wav":
+		return "audio/wav"
+	case ".m4a", ".aac":
+		return "audio/mp4"
+	case ".opus", ".ogg":
+		return "audio/ogg"
+	case ".mp3":
+		return "audio/mpeg"
+	}
+	if t := mime.TypeByExtension(ext); t != "" {
+		return t
+	}
+	return "application/octet-stream"
 }
 
 // waitAcks waits until everything sent was acknowledged (or timeout).
@@ -324,7 +368,7 @@ func (s *chatSession) interactive(ctx context.Context, to string, in io.Reader) 
 			s.waitAcks(5 * time.Second)
 			return nil
 		case line == "/help":
-			s.printf("/audio <file> [caption]   send a voice note\n/to <node|address>        change recipient (now %s)\n"+
+			s.printf("/audio <file> [caption]   send a voice note\n/file <path> [caption]    send any file (end-to-end encrypted)\n/to <node|address>        change recipient (now %s)\n"+
 				"/allow [node]             accept a message request\n/block [node]             drop everything from node\n"+
 				"/safety [node]            show the safety number to compare with node\n/verified [node]          mark node as verified (after comparing)\n"+
 				"/accept [node]            trust node's new key after KEY CHANGED\n/quit\n", to)
@@ -343,8 +387,9 @@ func (s *chatSession) interactive(ctx context.Context, to string, in io.Reader) 
 				s.expect(to, a.Key)
 			}
 			s.printf("now chatting with %s\n", to)
-		case strings.HasPrefix(line, "/audio "):
-			rest := strings.TrimSpace(strings.TrimPrefix(line, "/audio "))
+		case strings.HasPrefix(line, "/audio ") || strings.HasPrefix(line, "/file "):
+			_, rest, _ := strings.Cut(line, " ")
+			rest = strings.TrimSpace(rest)
 			path, caption := splitPathCaption(rest)
 			if err := s.sendFile(ctx, to, path, "", caption); err != nil {
 				s.printf("! %v\n", err)

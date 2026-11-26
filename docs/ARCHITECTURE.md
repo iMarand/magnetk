@@ -131,6 +131,12 @@ a consumer that stays stuck has messages dropped (counted in
 `Subscription.Dropped()` and `Stats().Dropped`). The relay applies the same
 idea per node (`MAX_QUEUE_PER_NODE`, `SLOW_CONSUMER=drop|disconnect`).
 
+**Transfer tuning.** The pipeline depth per stream adapts to the measured
+throughput (AIMD every 8 chunks, 2 to 32 requests in flight). Chunks of
+compressible files are sent deflated as `CHUNK_DATA_Z` (0xA5) when the
+downloader sets `ChunkAcceptCompressed` in `CHUNK_REQ`; older peers ignore
+the flag. Byte-range downloads fetch only the chunks covering the range.
+
 **Files.** `Share` hashes the file once (parallel, cached by size+mtime)
 into a manifest: whole-file SHA-256, chunk size, per-chunk SHA-256 and a
 Merkle-style root. The link
@@ -213,6 +219,11 @@ real networks and send every log line to the PC. See
   time, size and keys inside the ciphertext. Keys are exchanged through a
   direct request answered inside the engine
   (`Node.HandleSystemRequests`), so apps do not have to read it.
+* Attachments over 256 KB (and `SendFile`) go through the file engine: the
+  file is encrypted with a fresh key (AES-256-GCM in 1 MiB segments,
+  deflated first if compressible) and shared, and the sealed message carries
+  only the link, key and SHA-256. The sender stops sharing once the receiver
+  acknowledges.
 * Exposed through the C ABI (`mk_identity`, `mk_chat_send`,
   `mk_chat_contact`, `MK_KIND_CHAT`), the Python, C++ and Go SDKs, the CLI
   (`magnetk chat`, `magnetk id`) and the Android app.

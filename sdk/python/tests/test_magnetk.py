@@ -265,3 +265,48 @@ def test_secure_chat(relay, tmp_path):
     finally:
         alice.close()
         bob.close()
+
+
+def test_range_compression_adaptive(tmp_path, pair):
+    a, b = pair
+    lines = "".join("%08d,sensor-%d,temp=%d.%d,status=ok\n" % (i, i % 17, 20 + i % 9, i % 10) for i in range(120000))
+    src = tmp_path / "data.csv"
+    src.write_text(lines)
+    data = src.read_bytes()
+    shared = b.share(str(src))
+    # whole file: compressible text travels compressed, window adapts
+    res = a.download(shared.link, str(tmp_path / "full.csv"))
+    assert (tmp_path / "full.csv").read_bytes() == data
+    assert 0 < res.wire_bytes < len(data) * 0.5
+    # without compression the wire carries everything
+    res = a.download(shared.link, str(tmp_path / "plain.csv"), compression=False, resume=False)
+    assert res.wire_bytes >= len(data)
+    # byte range: exactly those bytes, verified
+    res = a.download(shared.link, str(tmp_path / "part.csv"), offset=1_000_003, length=777_777)
+    assert (tmp_path / "part.csv").read_bytes() == data[1_000_003:1_000_003 + 777_777]
+    assert res.offset == 1_000_003
+
+
+def test_chat_large_file(relay, tmp_path):
+    suffix = time.monotonic_ns()
+    alice = magnetk.Node(relays=[relay.address], id="py-fa-%d" % suffix, cache_dir="-",
+                         identity_file=str(tmp_path / "a.key"), chat_dir=str(tmp_path / "a"))
+    bob = magnetk.Node(relays=[relay.address], id="py-fb-%d" % suffix, cache_dir="-",
+                       identity_file=str(tmp_path / "b.key"), chat_dir=str(tmp_path / "b"))
+    try:
+        big = tmp_path / "video.bin"
+        big.write_bytes(os.urandom(2 * 1024 * 1024))
+        sent = alice.chat_send(bob.id, "big file", file=str(big))
+        assert sent.kind == "file" and sent.encrypted and sent.link
+        final = None
+        deadline = time.monotonic() + 30
+        while final is None and time.monotonic() < deadline:
+            m = bob.chat_receive(timeout=5)
+            if m and m.kind == "file" and not m.pending:
+                final = m
+        assert final and final.attachment_ok and final.encrypted and final.text == "big file"
+        with open(final.path, "rb") as f:
+            assert f.read() == big.read_bytes()
+    finally:
+        alice.close()
+        bob.close()

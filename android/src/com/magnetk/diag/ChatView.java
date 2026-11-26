@@ -71,6 +71,8 @@ final class ChatView extends LinearLayout {
     private final SimpleDateFormat hhmm = new SimpleDateFormat("HH:mm:ss", Locale.US);
 
     private volatile boolean recording;
+    private MediaRecorder aacRec; // AAC voice notes (about 8x smaller than WAV)
+    private File aacFile;
     private long recStart;
     private MediaPlayer player;
     private TextView playing;
@@ -453,7 +455,18 @@ final class ChatView extends LinearLayout {
                 boolean request = m.optBoolean("request");
                 if (!request) setTarget(from); // reply goes to whoever wrote last
                 TextView meta;
-                if (kind.equals("audio")) {
+                if (kind.equals("file") && m.optBoolean("pending")) {
+                    info("receiving " + m.optString("name") + " (" + voiceLabel(0, m.optInt("size")).replace("\u25B6 Voice 0.0s \u00B7 ", "") + ") from " + from + "\u2026");
+                    continue;
+                }
+                if (kind.equals("file") && !m.optString("mime").startsWith("audio")) {
+                    String cap = m.optString("text");
+                    String label = "\uD83D\uDCCE " + m.optString("name") + " \u00B7 " + voiceLabel(0, m.optInt("size")).replace("\u25B6 Voice 0.0s \u00B7 ", "");
+                    meta = bubble(false, from, cap.isEmpty() ? label : label + "\n" + cap, null);
+                    boolean ok = m.optBoolean("verified");
+                    meta.setText(meta.getText() + (ok ? "  sha256 \u2713 saved: " + m.optString("path") : "  " + m.optString("error", "SHA256 MISMATCH")));
+                    if (!ok) meta.setTextColor(Color.RED);
+                } else if (kind.equals("audio") || kind.equals("file")) {
                     String path = m.optString("path", null);
                     String label = voiceLabel(m.optInt("dur_ms"), m.optInt("size"));
                     String cap = m.optString("text");
@@ -481,7 +494,8 @@ final class ChatView extends LinearLayout {
 
     private void toggleRecording() {
         if (recording) {
-            recording = false; // the recorder thread finishes and sends
+            if (aacRec != null) stopAac();
+            else recording = false; // the WAV recorder thread finishes and sends
             return;
         }
         if (!host.connected()) {
@@ -491,7 +505,69 @@ final class ChatView extends LinearLayout {
         if (host.ensureMicPermission()) startRecording();
     }
 
+    /** Records an AAC (m4a) voice note; falls back to WAV if the device cannot. */
     void startRecording() {
+        try {
+            File dir = new File(act.getCacheDir(), "voice");
+            dir.mkdirs();
+            aacFile = new File(dir, "rec-" + System.currentTimeMillis() + ".m4a");
+            MediaRecorder r = new MediaRecorder();
+            r.setAudioSource(MediaRecorder.AudioSource.MIC);
+            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            r.setAudioChannels(1);
+            r.setAudioSamplingRate(22050);
+            r.setAudioEncodingBitRate(32000);
+            r.setOutputFile(aacFile.getAbsolutePath());
+            r.prepare();
+            r.start();
+            aacRec = r;
+        } catch (Exception e) {
+            aacRec = null;
+            info("AAC recorder unavailable (" + e.getMessage() + "), recording WAV");
+            startRecordingWav();
+            return;
+        }
+        recording = true;
+        recStart = SystemClock.elapsedRealtime();
+        recBtn.setText("\u25A0 Stop");
+        recBtn.setTextColor(Color.RED);
+        tickRec();
+    }
+
+    private void stopAac() {
+        final MediaRecorder r = aacRec;
+        aacRec = null;
+        recording = false;
+        final int durMs = (int) (SystemClock.elapsedRealtime() - recStart);
+        recBtn.setText("\uD83C\uDFA4 Rec");
+        recBtn.setTextColor(Color.BLACK);
+        boolean ok = true;
+        try {
+            r.stop();
+        } catch (Exception e) {
+            ok = false; // too short: nothing was recorded
+        }
+        r.release();
+        if (!ok || durMs < 300) {
+            aacFile.delete();
+            info("voice note too short");
+            return;
+        }
+        sendVoiceFile(aacFile, durMs, "audio/mp4");
+    }
+
+    /** Shows an outgoing voice bubble and sends the file (big ones go through the file engine). */
+    private void sendVoiceFile(final File f, final int durMs, final String mime) {
+        final TextView meta = bubble(true, "", voiceLabel(durMs, (int) f.length()), f.getAbsolutePath());
+        final String to = target;
+        new Thread(() -> {
+            String r = Native.chatSendAudio(to, f.getAbsolutePath(), mime, durMs);
+            ui.post(() -> sent(meta, r));
+        }).start();
+    }
+
+    void startRecordingWav() {
         final int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         final AudioRecord rec;
         try {

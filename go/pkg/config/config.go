@@ -337,6 +337,8 @@ func (f *File) Node() node.Config {
 		HeartbeatTimeout:  f.Dur("HEARTBEAT_TIMEOUT", 0),
 		ChunkSize:         cs,
 		StreamsPerSource:  f.Int("STREAMS_PER_SOURCE", f.Int("MAX_PARALLEL_CHUNKS", 0)),
+		Pipeline:          f.Int("PIPELINE", 0),
+		NoCompression:     !f.Bool("COMPRESSION", true),
 		CacheDir:          f.Str("CACHE_DIR", ""),
 		LinkRelays:        f.List("LINK_RELAYS"),
 	}

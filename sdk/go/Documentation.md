@@ -124,6 +124,31 @@ l, _ := magnetk.ParseLink(link)                // FileHash, FileName, FileSize, 
 Downloads use all providers in parallel, verify every chunk and the whole
 file, and resume from `<file>.mkpart`.
 
+```go
+// 8 MB starting at 100 MB, every chunk verified
+part, _ := n.Download(ctx, link, "preview.bin", &magnetk.DownloadOptions{Offset: 100 << 20, Length: 8 << 20})
+// fixed pipeline, no compression
+res, _ := n.Download(ctx, link, "out/", &magnetk.DownloadOptions{Pipeline: 8, NoCompression: true})
+fmt.Println(res.WireBytes, res.Bytes)
+```
+
+**Adaptive, compressed, partial**
+
+* **Adaptive pipeline:** with `Pipeline: 0` (the default), each stream measures its throughput
+  and keeps more chunk requests in flight while that improves (up to `MaxPipeline`, 32).
+  It backs off when throughput drops, so fast links fill up and slow or unstable ones
+  are not flooded. `Progress.Window` shows how many requests are in flight.
+* **Compression on the fly:** compressible files (text, CSV, JSON, logs, raw images or
+  audio) are sent deflated, while already compressed formats are detected and sent as
+  they are. Chunk hashes cover the original bytes, so verification does not change.
+  `WireBytes` shows what actually crossed the network. Turn it off per download or
+  per node (`COMPRESSION=false`).
+* **Byte ranges:** `Offset` and `Length` fetch only the chunks covering the range (each
+  one verified) and write exactly those bytes. This is useful for previews, seeking in
+  media, or resuming at an exact position. It needs a link, because the link carries
+  the manifest root.
+
+
 ## Relays
 
 ```go
@@ -192,7 +217,8 @@ sc := magnetk.NewSecureChat(n, "received", "alice-peers.json",
 go func() { for m := range n.Messages() { sc.HandleMessage(m) } }()
 
 sc.Send(ctx, "bob", "hello", "", 0, nil)                     // text
-sc.Send(ctx, "bob", "listen", "audio/wav", 0, wavBytes)       // voice note / any attachment
+sc.Send(ctx, "bob", "listen", "audio/mp4", 0, voice)          // voice note (over 256 KB: sent as a file)
+sc.SendFile(ctx, "bob", "video.mp4", "look", "video/mp4", 0)  // any file up to 4 GiB, encrypted end to end
 fmt.Println(sc.SafetyNumber("bob"))                           // compare with bob once, then:
 sc.MarkVerified("bob")
 

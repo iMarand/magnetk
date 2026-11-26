@@ -119,7 +119,7 @@ func New(cfg Config) (*Node, error) {
 		services: make(map[string]func(*Pipe)),
 		inbox:    make(chan *Message, cfg.InboxSize),
 		pipeQ:    make(chan *Pipe, 64),
-		store:    files.NewStore(),
+		store:    newStore(cfg.NoCompression),
 		id:       cfg.ID,
 	}
 	n.direct = newDirectCache(n)

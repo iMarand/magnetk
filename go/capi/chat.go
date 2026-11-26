@@ -179,3 +179,22 @@ func mk_chat_contact(h C.uint64_t, action, peer *C.char, out **C.char, errOut **
 	}
 	return mkOK
 }
+
+//export mk_chat_send_file
+func mk_chat_send_file(h C.uint64_t, to, path, caption, mime *C.char, durMs C.int, out **C.char, errOut **C.char) C.int {
+	nh, ok := getNode(h, errOut)
+	if !ok {
+		return mkErrInvalid
+	}
+	if nh.chat == nil {
+		return invalid(errOut, "chat is off for this node (open it with \"chat\": true)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	m, err := nh.chat.SendFile(ctx, C.GoString(to), C.GoString(path), C.GoString(caption), C.GoString(mime), int(durMs))
+	if err != nil {
+		return setErr(errOut, err)
+	}
+	jsonOut(out, m)
+	return mkOK
+}

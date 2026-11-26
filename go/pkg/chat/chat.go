@@ -67,6 +67,10 @@ type Msg struct {
 	Sig    string `json:"sig,omitempty"`    // signature over Signed() (base64)
 	XKey   string `json:"xkey,omitempty"`   // sender's X25519 encryption key (base64)
 	EPK    string `json:"epk,omitempty"`    // sealed: ephemeral X25519 key (base64)
+	// file attachments (KindFile): the file travels through the file engine
+	Name    string `json:"name,omitempty"`     // file name
+	Link    string `json:"link,omitempty"`     // magnetk:? link of the (encrypted) file
+	FileKey string `json:"file_key,omitempty"` // AES key of the encrypted file (inside sealed messages only)
 
 	// Filled in locally, never sent.
 	Dir      string  `json:"dir,omitempty"`      // "in" or "out"
@@ -86,13 +90,15 @@ type Msg struct {
 	// SafetyChecked: the sender's key was verified with the safety number.
 	SafetyChecked bool   `json:"safety_checked,omitempty"`
 	Error         string `json:"error,omitempty"` // e.g. cannot decrypt
+	// Pending: a file attachment is being downloaded (a final event follows).
+	Pending bool `json:"pending,omitempty"`
 }
 
 // Signed returns the bytes a chat message signature covers: every field
 // that carries meaning, including the attachment hash.
 func (m Msg) Signed() []byte {
-	return []byte(fmt.Sprintf("magnetk-chat-v2|%q|%q|%q|%q|%q|%q|%d|%d|%q|%d|%q|%q",
-		m.ID, m.From, m.To, m.Kind, m.Text, m.Mime, m.DurMs, m.Size, m.SHA256, m.T, m.XKey, m.EPK))
+	return []byte(fmt.Sprintf("magnetk-chat-v3|%q|%q|%q|%q|%q|%q|%d|%d|%q|%d|%q|%q|%q|%q|%q",
+		m.ID, m.From, m.To, m.Kind, m.Text, m.Mime, m.DurMs, m.Size, m.SHA256, m.T, m.XKey, m.EPK, m.Name, m.Link, m.FileKey))
 }
 
 func (m *Msg) sign(k *identity.Key) {
@@ -132,7 +138,7 @@ func newID() string {
 // Encode builds the wire form of m with its attachment.
 func Encode(m Msg, att []byte) []byte {
 	m.Dir, m.Path, m.Verified, m.RTTMs, m.Acked, m.Trust, m.Fingerprint = "", "", false, 0, false, "", ""
-	m.Encrypted, m.Request, m.SafetyChecked, m.Error = false, false, false, ""
+	m.Encrypted, m.Request, m.SafetyChecked, m.Error, m.Pending = false, false, false, "", false
 	h, _ := json.Marshal(m)
 	out := make([]byte, 0, 2+len(h)+len(att))
 	out = append(out, Tag)
@@ -225,6 +231,19 @@ func Summary(m Msg) string {
 		return s
 	case KindAck:
 		return "ack " + m.Text
+	case KindFile:
+		s := "file " + m.Name + ", " + fmtSize(m.Size)
+		if m.DurMs > 0 {
+			s = "voice note " + fmtDur(m.DurMs) + ", " + fmtSize(m.Size) + " (file transfer)"
+		}
+		if m.Dir == "in" && !m.Pending {
+			if m.Verified {
+				s += ", sha256 ok"
+			} else if m.Path != "" {
+				s += ", SHA256 MISMATCH"
+			}
+		}
+		return s
 	}
 	return m.Text
 }

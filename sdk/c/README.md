@@ -104,5 +104,11 @@ mk_chat_contact(n, "allow", "carol", NULL, &err);                 /* accept a me
 | `mk_identity` | this node's fingerprint and `magnetk://` address |
 | `mk_chat_send` | text and/or attachment, end-to-end encrypted when both sides have keys |
 | `mk_chat_contact` | `allow`, `block`, `verified`, `accept` (changed key), `safety`, `contact`, `expect` |
+| `mk_chat_send_file` | any file from disk, encrypted and sent through the file engine (kind `file`) |
+
+Download options (`mk_download_start` JSON): `offset`/`length` (byte range),
+`no_compression`, `pipeline` (0 = adaptive), `max_pipeline`, `max_sources`,
+`streams_per_source`, `route`, `seed`, `no_resume`. Progress JSON also has
+`window` and `wire_bytes`.
 
 Model and limits: [SECURITY.md](../../docs/SECURITY.md).

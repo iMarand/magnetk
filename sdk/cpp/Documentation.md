@@ -86,6 +86,7 @@ int main() {
 | `share(path)` → `SharedFile{hash,name,size,link,...}` | serve a file; `link` can be given to anyone |
 | `unshare(hash)`, `providers_json(hash)` | |
 | `download(link, out, progress_cb, route, seed)` → `DownloadResult` | multi-source, verified, resumable |
+| `download(link, out, DownloadOptions, progress_cb)` | `offset`/`length` (byte range), `compression`, `pipeline` (0 = adaptive), `max_sources`, ... |
 | `close()` | also done by the destructor |
 
 `Message`: `kind`, `id`, `from`, `subject`, `data` (binary-safe
@@ -140,6 +141,7 @@ magnetk::Node alice(o);
 std::cout << alice.identity_json() << "\n";          // {"fingerprint","formatted","address"}
 alice.chat_send("bob", "hello");                      // end-to-end encrypted + signed
 alice.chat_send("bob", "listen", wav_bytes, "audio/wav");
+alice.chat_send_file("bob", "video.mp4", "look");       // any file, streamed and encrypted end to end
 while (auto m = alice.receive(1000)) {
     if (m->is_chat()) std::cout << m->subject << " " << m->data << "\n";   // data = JSON
 }
