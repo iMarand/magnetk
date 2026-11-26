@@ -72,6 +72,7 @@ magnetk get "magnetk:?xt=urn:sha256:..."        # anywhere
 magnetk bench -local all                        # measure on this machine
 magnetk chat -relay vps:4002 a52-3cc9 "hi"       # chat (text, -audio voice notes) with any node
 magnetk open "magnetk://a52-3cc9@vps:4002/chat" # what clicking a magnetk:// link runs
+magnetk id -relay vps:4002                      # your identity fingerprint + shareable magnetk:// address
 ```
 
 Install (binary on PATH + `magnetk://` links): `scripts/install.sh` · Windows `scripts\install.ps1` · server `sudo scripts/install.sh --relay`.
@@ -211,7 +212,9 @@ cmake -S sdk/cpp -B sdk/cpp/build && cmake --build sdk/cpp/build && sdk/cpp/buil
 | Relay: TCP + TLS 1.3 fallback | TCP | 4002 |
 | Relay: v1 / JavaScript SDK | TCP | 4003 |
 | Node direct (peer-to-peer) listener | UDP + TCP | `DIRECT_PORT` (random by default) |
-| Field-test host direct port | UDP + TCP | 4012 |
+| Field-test host direct port | UDP + TCP | 4012 (the guide uses 4005) |
+| Field-test host HTTPS (Magnetk-vs-HTTPS comparison) | TCP | 4443 |
+| Field-test host dashboard (local only) | TCP | 127.0.0.1:8090 |
 
 ---
 
@@ -236,7 +239,8 @@ cmake -S sdk/cpp -B sdk/cpp/build && cmake --build sdk/cpp/build && sdk/cpp/buil
 | Phase | Focus |
 |---|---|
 | ✅ Done (v2) | QUIC + TCP transport, relay federation and failover, messaging, pub/sub, RPC, pipes, multi-source verified downloads, Go/Python/C++/C SDKs, Android field-test app |
-| 🔨 Phase 1 | DHT, NAT hole punching, QUIC on Android, mobile SDKs |
+| ✅ Done (v2.1) | Identity keys bound by relays, end-to-end encrypted and signed chat and voice notes, message requests, safety numbers, `magnetk://` addresses and link handlers, install scripts, Magnetk-vs-HTTPS comparison |
+| 🔨 Phase 1 | Double Ratchet (forward secrecy), encrypted group chat, DHT, NAT hole punching, QUIC on Android, mobile SDKs |
 | 🔨 Phase 2 | Smart contract payments, chunk accounting, VISA on-ramp |
 | 🔨 Phase 3 | Tiered resource system, staked node registry, guaranteed availability |
 | 📋 Phase 4 | Messaging, pub/sub event bus, distributed RPC, live streaming |
