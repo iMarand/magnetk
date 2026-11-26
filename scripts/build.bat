@@ -33,6 +33,13 @@ goto magnetk
 
 :msquic
 echo === MsQuic (Release, Schannel) ===
+if not defined MSQUIC_REV set MSQUIC_REV=6c284c8ab68efd5a152646746dec4697e17a842c
+if exist msquic\scripts\build.ps1 goto msquic_build
+echo === fetching MsQuic source (microsoft/msquic @ %MSQUIC_REV%) ===
+git clone https://github.com/microsoft/msquic.git msquic || exit /b 1
+git -C msquic checkout -q %MSQUIC_REV% || exit /b 1
+git -C msquic submodule update --init --recursive || exit /b 1
+:msquic_build
 pwsh -NoProfile -File msquic\scripts\build.ps1 -Config Release -Tls schannel -Arch x64 -DisableTest -DisableTools || (echo [!] MsQuic build failed & exit /b 1)
 
 :magnetk
