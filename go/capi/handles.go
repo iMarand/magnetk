@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/iMarand/magnetk/go/pkg/chat"
 	"github.com/iMarand/magnetk/go/pkg/files"
 	"github.com/iMarand/magnetk/go/pkg/node"
 	"github.com/iMarand/magnetk/go/pkg/relay"
@@ -94,6 +95,9 @@ type nodeHandle struct {
 	mu       sync.Mutex
 	nextReq  uint64
 	requests map[uint64]*node.Message // pending requests awaiting mk_respond
+
+	chat  *chat.Box  // secure chat ("chat": true)
+	chatq []chat.Msg // decoded chat events waiting for mk_recv
 }
 
 type downloadHandle struct {

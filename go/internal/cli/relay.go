@@ -32,6 +32,8 @@ func RelayMain(args []string) error {
 	httpAddr := fs.String("http", "", "serve /stats, /metrics and /healthz on this address (e.g. 127.0.0.1:8090)")
 	statsEvery := fs.Duration("stats-interval", time.Minute, "log a stats line this often (0 = never)")
 	verbose := fs.Bool("v", false, "log every connection")
+	idsFile := fs.String("identities", "", "file binding node ids to identity keys (default IDENTITIES_FILE or relay-identities.json; \"-\" = memory only)")
+	requireID := fs.Bool("require-identity", false, "reject nodes without an identity key")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -42,6 +44,17 @@ func RelayMain(args []string) error {
 	}
 	file.ApplyRuntime()
 	cfg := file.Relay()
+	if *idsFile != "" {
+		cfg.IdentitiesFile = *idsFile
+	} else if cfg.IdentitiesFile == "" {
+		cfg.IdentitiesFile = "relay-identities.json"
+	}
+	if cfg.IdentitiesFile == "-" {
+		cfg.IdentitiesFile = ""
+	}
+	if *requireID {
+		cfg.RequireIdentity = true
+	}
 	if *bind != "" {
 		_, p, _ := net.SplitHostPort(cfg.Listen)
 		cfg.Listen = net.JoinHostPort(*bind, p)

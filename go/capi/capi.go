@@ -14,19 +14,7 @@
 package main
 
 /*
-#include <stdint.h>
-#include <stdlib.h>
-
-typedef struct mk_message {
-    int32_t  kind;      // 1 direct, 2 publish, 3 request, 4 presence
-    uint64_t id;
-    char*    from;
-    char*    subject;
-    void*    data;
-    int32_t  len;
-    int32_t  datagram;
-    uint64_t request;   // non-zero for requests: answer with mk_respond
-} mk_message;
+#include "mk_types.h"
 */
 import "C"
 
@@ -41,6 +29,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/iMarand/magnetk/go/pkg/chat"
 	"github.com/iMarand/magnetk/go/pkg/config"
 	"github.com/iMarand/magnetk/go/pkg/files"
 	"github.com/iMarand/magnetk/go/pkg/netx"
@@ -160,6 +149,14 @@ type nodeJSON struct {
 	Congestion       string   `json:"congestion"`
 	Profile          string   `json:"profile"`
 	Log              bool     `json:"log"`
+
+	// identity and secure chat
+	IdentityFile          string `json:"identity_file"`    // Ed25519 identity key (created if missing); "" = none
+	Chat                  *bool  `json:"chat"`             // decode secure chat (default: on with identity_file)
+	ChatDir               string `json:"chat_dir"`         // where received attachments are saved
+	KnownPeersFile        string `json:"known_peers_file"` // contacts/pinned keys (default next to identity_file)
+	ChatRequireApproval   bool   `json:"chat_require_approval"`
+	ChatRequireEncryption bool   `json:"chat_require_encryption"`
 }
 
 //export mk_node_open
@@ -197,6 +194,11 @@ func mk_node_open(configJSON *C.char, out *C.uint64_t, errOut **C.char) C.int {
 	if j.Log {
 		cfg.Logger = log.New(os.Stderr, "[magnetk] ", log.LstdFlags)
 	}
+	key, err := loadIdentity(j.IdentityFile)
+	if err != nil {
+		return setErr(errOut, err)
+	}
+	cfg.Key = key
 	n, err := node.New(cfg)
 	if err != nil {
 		return setErr(errOut, err)
@@ -211,7 +213,11 @@ func mk_node_open(configJSON *C.char, out *C.uint64_t, errOut **C.char) C.int {
 		n.Close()
 		return setErr(errOut, err)
 	}
-	*out = C.uint64_t(nodes.add(&nodeHandle{n: n, requests: map[uint64]*node.Message{}}))
+	nh := &nodeHandle{n: n, requests: map[uint64]*node.Message{}}
+	if (j.Chat == nil && key != nil) || (j.Chat != nil && *j.Chat) {
+		setupChat(nh, j)
+	}
+	*out = C.uint64_t(nodes.add(nh))
 	return mkOK
 }
 
@@ -386,14 +392,31 @@ func mk_recv(h C.uint64_t, timeoutMs C.int, out **C.mk_message, errOut **C.char)
 		return invalid(errOut, "out is NULL")
 	}
 	*out = nil
+	if cm := popChat(nh); cm != nil {
+		*out = cm
+		return 1
+	}
 	ctx, cancel := ctxFor(timeoutMs)
 	defer cancel()
-	m, err := nh.n.Receive(ctx)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return 0
+	var m *node.Message
+	for {
+		var err error
+		m, err = nh.n.Receive(ctx)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				return 0
+			}
+			return setErr(errOut, err)
 		}
-		return setErr(errOut, err)
+		if nh.chat != nil && m.Kind == node.KindDirect && chat.IsChat(m.Data) {
+			nh.chat.Handle(m.From, m.Data)
+			if cm := popChat(nh); cm != nil {
+				*out = cm
+				return 1
+			}
+			continue // e.g. a held request or a key exchange: nothing to show yet
+		}
+		break
 	}
 	cm := (*C.mk_message)(C.calloc(1, C.size_t(unsafe.Sizeof(C.mk_message{}))))
 	cm.kind = C.int32_t(m.Kind)

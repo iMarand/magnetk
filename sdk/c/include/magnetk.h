@@ -36,7 +36,7 @@ extern "C" {
 #define MK_ERR_TIMEOUT        -2
 #define MK_ERR_CLOSED         -3   /* node / pipe closed */
 #define MK_ERR_NO_ROUTE       -4   /* destination node not connected */
-#define MK_ERR_UNAUTHORIZED   -5   /* relay rejected the token */
+#define MK_ERR_UNAUTHORIZED   -5   /* relay rejected the token, or the node id belongs to another identity key */
 #define MK_ERR_NOT_CONNECTED  -6   /* no relay connection (or it dropped) */
 #define MK_ERR_REMOTE         -7   /* remote request handler returned an error */
 #define MK_ERR_REJECTED       -8   /* remote node refused the pipe */
@@ -49,6 +49,7 @@ extern "C" {
 #define MK_KIND_PUBLISH   2   /* matched one of your subscriptions */
 #define MK_KIND_REQUEST   3   /* answer with mk_respond(message.request) */
 #define MK_KIND_PRESENCE  4   /* subject "join"/"leave", from = node id */
+#define MK_KIND_CHAT      5   /* secure chat: subject = "text"|"audio"|"ack", data = JSON (see mk_chat_send) */
 
 /* ---------- send flags ---------- */
 #define MK_SEND_RECEIPT     1   /* wait for the relay's delivery receipt */
@@ -85,6 +86,14 @@ void        mk_free(void* p);
  *   streams_per_source, cache_dir ("-" = off), link_relays [str],
  *   sub_buffer, slow_consumer_wait_ms, connect_timeout_ms, congestion ("cubic" default | "bbr"),
  *   profile ("max_throughput"|"low_latency"|"realtime"|"scavenger"), log (bool)
+ * identity and secure chat:
+ *   identity_file     Ed25519 identity key, created if missing ("~/..." allowed).
+ *                     Relays bind the node id to it; chat is signed and encrypted with it.
+ *   chat (bool)       decode secure chat in mk_recv (default: on when identity_file is set)
+ *   chat_dir          where received attachments are saved
+ *   known_peers_file  pinned keys and contacts (default: next to identity_file)
+ *   chat_require_approval    strangers arrive as requests until mk_chat_contact(.., "allow", ..)
+ *   chat_require_encryption  refuse to send or accept unencrypted chat
  * If relays is empty, MAGNETK_RELAYS (comma separated) is used.
  * mk_node_open blocks until the first relay connection succeeds. */
 int   mk_node_open(const char* config_json, mk_node* out, char** err);
@@ -92,6 +101,25 @@ int   mk_node_close(mk_node node);
 char* mk_node_id(mk_node node);                       /* free */
 char* mk_node_info(mk_node node);                     /* JSON, free */
 int   mk_node_wait_connected(mk_node node, int timeout_ms, char** err);
+
+/* ---------- identity and secure chat ----------
+ * Chat messages are end-to-end encrypted (X25519 + AES-256-GCM) and signed
+ * (Ed25519) when both sides have identity keys; the relay sees only who,
+ * when and how big. They arrive through mk_recv as MK_KIND_CHAT with data =
+ * JSON: {"id","from","to","kind","text","mime","dur_ms","size","sha256","t",
+ * "path" (saved attachment),"verified" (attachment hash ok),"encrypted",
+ * "trust" ("verified"|"new"|"changed"|"unsigned"|"invalid"),"fingerprint",
+ * "request" (stranger: no ack until allowed),"safety_checked","rtt_ms" (acks),
+ * "error"}. */
+/* {"fingerprint","formatted","address"} (address = magnetk://id@relay?key=...) */
+int mk_identity(mk_node node, char** out_json, char** err);
+/* send text and/or an attachment (voice note); to = node id; out_json = the sent message */
+int mk_chat_send(mk_node node, const char* to, const char* text, const void* attachment, int attachment_len,
+                 const char* mime, int dur_ms, char** out_json, char** err);
+/* action: "allow" | "block" | "verified" (safety number compared) | "accept" (a changed key)
+ *       | "safety" (out_json = {"peer","safety_number"}) | "contact" (out_json = state)
+ *       | "expect" (peer = "node=FINGERPRINT", e.g. from a key= address) */
+int mk_chat_contact(mk_node node, const char* action, const char* peer, char** out_json, char** err);
 
 /* ---------- messaging ---------- */
 int mk_send(mk_node node, const char* to, const void* data, int len,

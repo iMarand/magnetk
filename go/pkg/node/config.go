@@ -14,6 +14,7 @@ package node
 
 import (
 	"errors"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"log"
 	"time"
 
@@ -36,6 +37,9 @@ type Config struct {
 	ID    string // node id; empty = assigned by the relay
 	Token string // auth token, if the relay requires one
 	Meta  string // free-form metadata shown to other nodes (e.g. JSON)
+	// Key signs the HELLO so relays bind ID to it (nobody else can use the
+	// ID afterwards); nil = no identity. See identity.LoadOrCreate.
+	Key *identity.Key
 
 	// Relays to use, in preference order ("host:port"). The node connects to
 	// the first that answers and fails over to the others.
@@ -165,7 +169,7 @@ var (
 	ErrClosed       = errors.New("magnetk: node closed")
 	ErrNotConnected = errors.New("magnetk: not connected to a relay")
 	ErrDisconnected = errors.New("magnetk: relay connection lost")
-	ErrUnauthorized = errors.New("magnetk: relay rejected the token")
+	ErrUnauthorized = errors.New("magnetk: relay rejected the token or identity")
 	ErrNoRoute      = errors.New("magnetk: destination is not connected")
 	ErrDropped      = errors.New("magnetk: message dropped (receiver too slow)")
 	ErrTimeout      = errors.New("magnetk: timed out")

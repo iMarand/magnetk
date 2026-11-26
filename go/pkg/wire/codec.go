@@ -194,6 +194,9 @@ func (d *Dec) Rest() []byte {
 	return p
 }
 
+// Remaining returns the number of undecoded bytes.
+func (d *Dec) Remaining() int { return len(d.b) }
+
 // Err returns the first decoding error.
 func (d *Dec) Err() error { return d.err }
 

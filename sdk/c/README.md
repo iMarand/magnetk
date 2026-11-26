@@ -81,3 +81,28 @@ gcc -I sdk/c/include sdk/c/test/capi_test.c -L build/lib -lmagnetk -o capi_test 
 
 Resource limits for the host process: `MAGNETK_MAX_PROCS`,
 `MAGNETK_MEMORY_LIMIT_MB`, `MAGNETK_GC_PERCENT` (environment).
+
+## Identity and secure chat
+
+Open the node with `"identity_file":"alice.key"` (and optionally
+`"chat_require_approval":true`). Chat messages and acks then arrive through
+`mk_recv` as `MK_KIND_CHAT` with JSON in `data`.
+
+```c
+char* out = NULL;
+mk_identity(n, &out, &err);                    /* {"fingerprint","formatted","address"} */
+mk_free(out);
+mk_chat_send(n, "bob", "hello", NULL, 0, NULL, 0, &out, &err);   /* encrypted + signed */
+mk_free(out);
+mk_chat_contact(n, "safety", "bob", &out, &err);                 /* {"peer","safety_number"} */
+mk_free(out);
+mk_chat_contact(n, "allow", "carol", NULL, &err);                 /* accept a message request */
+```
+
+| Function | |
+|---|---|
+| `mk_identity` | this node's fingerprint and `magnetk://` address |
+| `mk_chat_send` | text and/or attachment, end-to-end encrypted when both sides have keys |
+| `mk_chat_contact` | `allow`, `block`, `verified`, `accept` (changed key), `safety`, `contact`, `expect` |
+
+Model and limits: [SECURITY.md](../../docs/SECURITY.md).

@@ -35,3 +35,11 @@ pip install ./sdk/python
 
 Full guide: [Documentation.md](Documentation.md). Examples: `examples/`.
 Run a relay: `magnetk relay` ([deployment guide](../../docs/RELAY_DEPLOYMENT.md)).
+
+Secure chat (end-to-end encrypted, signed, message requests, safety numbers):
+
+```python
+n = magnetk.Node("relay:4002", id="alice", identity_file="alice.key", chat_require_approval=True)
+n.on_chat(lambda m: print(m.sender, m.text, m.encrypted, m.trust))
+n.chat_send("bob", "hi")
+```

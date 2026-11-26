@@ -197,3 +197,25 @@ relay link). Encoders/decoders: `go/pkg/wire/messages.go`.
 measure latency, throughput, integrity, security and reconnect behaviour on
 real networks and send every log line to the PC. See
 [FIELD_TEST.md](FIELD_TEST.md).
+
+## Identity and secure chat
+
+* `pkg/identity`: the Ed25519 identity key (with an X25519 encryption key
+  derived from the same seed), fingerprints, safety numbers, per-message
+  sealing (X25519 ephemeral-static + static-static ECDH, HKDF-SHA256,
+  AES-256-GCM), and the contacts store (pinned keys, allowed, blocked,
+  verified).
+* HELLO carries an optional public key, timestamp and signature (appended
+  fields, compatible with older peers). The relay verifies them and binds the
+  node id to the key (`IDENTITIES_FILE`).
+* `pkg/chat`: chat messages are direct messages tagged `C`: a JSON header
+  plus the attachment. Sealed messages put everything except id, from, to,
+  time, size and keys inside the ciphertext. Keys are exchanged through a
+  direct request answered inside the engine
+  (`Node.HandleSystemRequests`), so apps do not have to read it.
+* Exposed through the C ABI (`mk_identity`, `mk_chat_send`,
+  `mk_chat_contact`, `MK_KIND_CHAT`), the Python, C++ and Go SDKs, the CLI
+  (`magnetk chat`, `magnetk id`) and the Android app.
+
+Details and limits: [SECURITY.md](SECURITY.md).
+

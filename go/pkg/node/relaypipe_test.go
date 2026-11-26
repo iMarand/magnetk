@@ -20,6 +20,9 @@ func TestRelayPipeThroughputStable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("throughput test")
 	}
+	if !transport.Available() {
+		t.Skip("QUIC transport not built (msquic)")
+	}
 	qc := transport.Config{Congestion: transport.ParseCongestion(os.Getenv("MK_TEST_CC"))}
 	r := startRelay(t, relay.Config{QUIC: qc})
 	host := startNode(t, Config{Relays: []string{addr(r)}, ID: "host", Transport: netx.ModeQUIC, QUIC: qc, Listen: true, ListenAddr: "127.0.0.1:0", WatchPresence: true})

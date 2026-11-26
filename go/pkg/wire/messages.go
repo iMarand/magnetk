@@ -136,17 +136,30 @@ type Hello struct {
 	Meta    string
 	Client  string
 	Addrs   []string // direct-connect candidates ("host:port")
+
+	// Optional identity (appended in 2.1; older peers omit it): an Ed25519
+	// public key and its signature over identity.HelloPayload(NodeID, TS).
+	PubKey []byte
+	Sig    []byte
+	TS     uint64 // unix ms
 }
 
 func (m *Hello) Encode() []byte {
 	return NewEnc(THello, 64+len(m.NodeID)+len(m.Token)+len(m.Meta)).
-		U8(m.Version).Str(m.NodeID).Str(m.Token).U32(m.Flags).Str(m.Meta).Str(m.Client).Strs(m.Addrs).Frame()
+		U8(m.Version).Str(m.NodeID).Str(m.Token).U32(m.Flags).Str(m.Meta).Str(m.Client).Strs(m.Addrs).
+		Bytes(m.PubKey).Bytes(m.Sig).U64(m.TS).Frame()
 }
 
 func DecodeHello(b []byte) (m Hello, err error) {
 	d := NewDec(b)
 	m.Version, m.NodeID, m.Token, m.Flags, m.Meta, m.Client = d.U8(), d.Str(), d.Str(), d.U32(), d.Str(), d.Str()
 	m.Addrs = d.Strs()
+	if d.Remaining() > 0 { // identity fields (2.1+)
+		m.PubKey, m.Sig, m.TS = d.Bytes(), d.Bytes(), d.U64()
+		if len(m.PubKey) == 0 {
+			m.PubKey, m.Sig = nil, nil
+		}
+	}
 	return m, d.Err()
 }
 

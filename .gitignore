@@ -57,3 +57,10 @@ __pycache__/
 *.mkpart.state
 diag-data/
 *.idsig
+
+# identity keys and contact stores (never commit)
+identity.key
+*.key
+known-peers.json
+*-peers.json
+relay-identities.json

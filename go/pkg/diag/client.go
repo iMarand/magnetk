@@ -20,8 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/iMarand/magnetk/go/pkg/chat"
 	"github.com/iMarand/magnetk/go/pkg/files"
 	"github.com/iMarand/magnetk/go/pkg/hrtime"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"github.com/iMarand/magnetk/go/pkg/netx"
 	"github.com/iMarand/magnetk/go/pkg/node"
 )
@@ -35,6 +37,9 @@ type ClientConfig struct {
 	Transport netx.Mode
 	Device    string // free text describing the device (model, OS)
 	DataDir   string // log file and downloads ("" = no log file, temp dir for downloads)
+	// KeyFile holds this device's identity key (default DataDir/identity.key;
+	// a new key per run without DataDir).
+	KeyFile string
 
 	PipeMB    int // bytes per pipe test (default 16 MiB)
 	Messages  int // bulk message count (default 20000)
@@ -42,6 +47,8 @@ type ClientConfig struct {
 
 	// OnLog receives every log line (e.g. to show it in a UI). Must not block.
 	OnLog func(LogLine)
+	// OnChat receives chat messages and delivery acks. Must not block.
+	OnChat func(chat.Msg)
 	// Logger receives engine logs (default: into the client log at DEBUG).
 	Logger *log.Logger
 }
@@ -50,7 +57,7 @@ type ClientConfig struct {
 var AllTests = []string{
 	"connect", "ping", "rpc", "messages", "pubsub", "datagram",
 	"upload.relay", "download.relay", "echo.relay",
-	"upload.auto", "download.auto", "file", "auth",
+	"upload.auto", "download.auto", "file", "auth", "compare",
 }
 
 // Client runs tests against a Host and streams logs to it.
@@ -69,6 +76,8 @@ type Client struct {
 	logKick chan struct{}
 
 	dgram chan *node.Message
+	chat  *chat.Box
+	key   *identity.Key
 
 	runMu      sync.Mutex
 	runCancel  context.CancelFunc
@@ -111,6 +120,30 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	c.block = make([]byte, 1<<20)
 	rand.Read(c.block)
 	c.ctx, c.stop = context.WithCancel(context.Background())
+	chatDir := filepath.Join(os.TempDir(), "magnetk-chat")
+	if cfg.DataDir != "" {
+		chatDir = filepath.Join(cfg.DataDir, "chat")
+	}
+	c.chat = chat.NewBox(cfg.ID, chatDir, func() *node.Node { return c.node }, c.onChat)
+	if cfg.KeyFile == "" && cfg.DataDir != "" {
+		cfg.KeyFile = filepath.Join(cfg.DataDir, "identity.key")
+	}
+	c.key = identity.Generate()
+	pinsFile := ""
+	if cfg.KeyFile != "" {
+		k, _, err := identity.LoadOrCreate(cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("diag: identity: %w", err)
+		}
+		c.key = k
+		pinsFile = filepath.Join(filepath.Dir(cfg.KeyFile), "known-peers.json")
+	}
+	c.cfg.KeyFile = cfg.KeyFile
+	c.chat.SetIdentity(c.key, identity.OpenPins(pinsFile))
+	// like a messenger: strangers arrive as message requests; the PC host
+	// this client was configured with is a known contact
+	c.chat.SetPolicy(chat.Policy{RequireApproval: true})
+	c.chat.Pins().SetAllowed(cfg.HostID, true)
 	if cfg.DataDir != "" {
 		os.MkdirAll(cfg.DataDir, 0o755)
 		c.logFile, _ = os.OpenFile(filepath.Join(cfg.DataDir, "magnetk-diag.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -120,6 +153,28 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 
 // ID returns the client node id.
 func (c *Client) ID() string { return c.cfg.ID }
+
+// ChatAllow accepts a message request from peer.
+func (c *Client) ChatAllow(peer string) { c.chat.Allow(peer) }
+
+// ChatBlock blocks peer.
+func (c *Client) ChatBlock(peer string) { c.chat.Block(peer) }
+
+// ChatSafetyNumber returns the safety number with peer ("" if unknown).
+func (c *Client) ChatSafetyNumber(peer string) string { return c.chat.SafetyNumber(peer) }
+
+// ChatMarkVerified records that the safety number with peer was compared.
+func (c *Client) ChatMarkVerified(peer string) { c.chat.MarkVerified(peer) }
+
+// ChatAcceptKey trusts peer's new key after a KEY CHANGED warning.
+func (c *Client) ChatAcceptKey(peer string) error { return c.chat.AcceptKey(peer) }
+
+// PinPeer sets the expected key of node (from a key= address); it returns the
+// previously pinned fingerprint if it was different.
+func (c *Client) PinPeer(node, fp string) string { return c.chat.Pins().Pin(node, fp) }
+
+// Fingerprint returns this device's identity key fingerprint.
+func (c *Client) Fingerprint() string { return c.key.Fingerprint() }
 
 // Node returns the underlying node (nil before Start).
 func (c *Client) Node() *node.Node { return c.node }
@@ -136,15 +191,17 @@ func (c *Client) Start(ctx context.Context) error {
 		Meta: c.cfg.Device, CacheDir: "-", Logger: logger,
 		HeartbeatInterval: c.cfg.Heartbeat, HeartbeatTimeout: 3 * c.cfg.Heartbeat,
 		ReconnectMin: 200 * time.Millisecond, ReconnectMax: 3 * time.Second,
-		OnEvent: c.onEvent,
+		OnEvent: c.onEvent, Key: c.key,
 	})
 	if err != nil {
 		c.logf("ERROR", "cannot create node: %v", err)
 		return err
 	}
 	c.node = n
+	c.chat.Attach(n)
 	c.logf("INFO", "magnetk diag client %s (%s/%s, %s) relays=%v transport=%s device=%q",
 		c.cfg.ID, runtime.GOOS, runtime.GOARCH, runtime.Version(), c.cfg.Relays, orDefault(string(c.cfg.Transport), "auto"), c.cfg.Device)
+	c.logf("INFO", "identity key %s (%s)", identity.Format(c.key.Fingerprint()), orDefault(c.cfg.KeyFile, "temporary"))
 
 	c.wg.Add(2)
 	go c.flushLogs()
@@ -520,6 +577,8 @@ func (c *Client) test(ctx context.Context, name string, m map[string]any) error 
 		return c.testFile(ctx, m)
 	case "auth":
 		return c.testAuth(ctx, m)
+	case "compare":
+		return c.testCompare(ctx, m)
 	}
 	return fmt.Errorf("unknown test %q", name)
 }
@@ -571,6 +630,22 @@ func (c *Client) testConnect(ctx context.Context, m map[string]any) error {
 	m["clock_offset_ms"] = round2(float64(h.TimeNs-mid.UnixNano()) / 1e6)
 	if !strings.HasPrefix(sec.Version, "TLS 1.3") {
 		return fmt.Errorf("connection is not TLS 1.3 (%q)", sec.Version)
+	}
+	// identity: ours is bound to our id by the relay (we connected with it);
+	// the host's key is pinned on first contact and must not change.
+	m["my_key"] = identity.Format(c.key.Fingerprint())
+	if h.Key != "" {
+		m["host_key"] = identity.Format(h.Key)
+		switch c.chat.Pins().Check(h.Host, h.Key) {
+		case identity.TrustNew:
+			m["host_key_check"] = "new (pinned now)"
+		case identity.TrustVerified:
+			m["host_key_check"] = "match"
+		case identity.TrustChanged:
+			m["host_key_check"] = "CHANGED"
+			return fmt.Errorf("host %s presents key %s, but it had %s before: not the same PC (or its key was reset)",
+				h.Host, identity.Short(h.Key), identity.Short(c.chat.Pins().Get(h.Host)))
+		}
 	}
 	switch {
 	case h.RelayCert == "" || in.Protocol != "tcp":
@@ -780,6 +855,10 @@ func (c *Client) inbox() {
 		case msg, ok := <-c.node.Messages():
 			if !ok {
 				return
+			}
+			if msg.Kind == node.KindDirect && chat.IsChat(msg.Data) {
+				c.chat.Handle(msg.From, msg.Data)
+				continue
 			}
 			if msg.Kind == node.KindDirect && len(msg.Data) > 0 && msg.Data[0] == 'D' {
 				select {
@@ -1102,4 +1181,35 @@ func (c *Client) Monitor(on bool) {
 			}
 		}
 	}()
+}
+
+// ===== chat =====
+
+func (c *Client) onChat(m chat.Msg) {
+	switch m.Kind {
+	case chat.KindAck:
+		c.logf("INFO", "chat %s delivered to %s, round trip %.1f ms", m.Text, m.From, m.RTTMs)
+	case chat.KindAudio:
+		c.logf("INFO", "chat received from %s: %s", m.From, chat.Summary(m))
+	}
+	if c.cfg.OnChat != nil {
+		c.cfg.OnChat(m)
+	}
+}
+
+// ChatText sends a text message to node "to" ("" = the host).
+func (c *Client) ChatText(to, text string) (chat.Msg, error) {
+	return c.chat.Send(c.ctx, orDefault(to, c.cfg.HostID), text, "", 0, nil)
+}
+
+// ChatAudio sends a voice note to node "to" ("" = the host).
+func (c *Client) ChatAudio(to string, data []byte, mime string, durMs int, caption string) (chat.Msg, error) {
+	if durMs <= 0 {
+		durMs = chat.WAVDurationMs(data)
+	}
+	m, err := c.chat.Send(c.ctx, orDefault(to, c.cfg.HostID), caption, mime, durMs, data)
+	if err == nil {
+		c.logf("INFO", "chat sent %s: %s", m.ID, chat.Summary(m))
+	}
+	return m, err
 }

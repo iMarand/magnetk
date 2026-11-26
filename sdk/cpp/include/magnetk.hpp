@@ -131,6 +131,9 @@ struct Api {
     int (*relay_port)(uint64_t);
     char* (*relay_stats_json)(uint64_t);
     int (*relay_close)(uint64_t);
+    int (*identity)(uint64_t, char**, char**);
+    int (*chat_send)(uint64_t, const char*, const char*, const void*, int, const char*, int, char**, char**);
+    int (*chat_contact)(uint64_t, const char*, const char*, char**, char**);
 
     static Api& get() {
         static Api api = load();
@@ -205,6 +208,7 @@ private:
         bind(a.download_cancel, "mk_download_cancel"); bind(a.download_free, "mk_download_free");
         bind(a.relay_start, "mk_relay_start"); bind(a.relay_port, "mk_relay_port");
         bind(a.relay_stats_json, "mk_relay_stats_json"); bind(a.relay_close, "mk_relay_close");
+        bind(a.identity, "mk_identity"); bind(a.chat_send, "mk_chat_send"); bind(a.chat_contact, "mk_chat_contact");
         return a;
     }
 };
@@ -319,7 +323,9 @@ inline bool quic_available() { return detail::Api::get().quic_available() != 0; 
 // Types
 // ======================================================================
 
-enum class Kind { Direct = 1, Publish = 2, Request = 3, Presence = 4 };
+/// Chat: a secure chat message or ack; subject = "text"|"audio"|"ack", data = JSON
+/// (text, path, encrypted, trust, request, fingerprint, ... - see magnetk.h).
+enum class Kind { Direct = 1, Publish = 2, Request = 3, Presence = 4, Chat = 5 };
 
 /// Send flags (combine with |).
 enum SendFlags : int { Receipt = 1, Store = 2, Unreliable = 4 };
@@ -334,6 +340,7 @@ struct Message {
     uint64_t request = 0;  ///< non-zero for requests (answer with Node::respond)
 
     bool is_request() const { return kind == Kind::Request; }
+    bool is_chat() const { return kind == Kind::Chat; }
 };
 
 struct SharedFile {
@@ -379,6 +386,12 @@ struct NodeOptions {
     std::vector<std::string> link_relays;
     std::string congestion;            ///< cubic (default) | bbr
     bool log = false;
+    // identity and secure chat
+    std::string identity_file;         ///< Ed25519 identity key (created if missing); enables secure chat
+    std::string chat_dir;              ///< where received attachments are saved
+    std::string known_peers_file;      ///< pinned keys / contacts (default next to identity_file)
+    bool chat_require_approval = false;   ///< strangers arrive as requests until chat_allow
+    bool chat_require_encryption = false; ///< refuse unencrypted chat
 
     std::string to_json() const {
         using detail::json_escape;
@@ -392,6 +405,8 @@ struct NodeOptions {
         i("chunk_size", chunk_size); i("streams_per_source", streams_per_source); s("cache_dir", cache_dir);
         i("inbox_size", inbox_size); i("sub_buffer", sub_buffer); i("slow_consumer_wait_ms", slow_consumer_wait_ms);
         s("congestion", congestion); b("log", log);
+        s("identity_file", identity_file); s("chat_dir", chat_dir); s("known_peers_file", known_peers_file);
+        b("chat_require_approval", chat_require_approval); b("chat_require_encryption", chat_require_encryption);
         if (!advertise.empty()) j += ",\"advertise\":" + detail::json_array(advertise);
         if (!link_relays.empty()) j += ",\"link_relays\":" + detail::json_array(link_relays);
         return j + "}";
@@ -625,7 +640,40 @@ public:
         char* err = nullptr;
         detail::check(api().unshare(h_, hash.c_str(), &err), &err);
     }
+    // ---------- identity and secure chat ----------
+
+    /// {"fingerprint","formatted","address"}; address = magnetk://id@relay?key=...
+    std::string identity_json() {
+        char* out = nullptr; char* err = nullptr;
+        detail::check(api().identity(h_, &out, &err), &err);
+        return detail::take(out);
+    }
+    /// Sends an end-to-end encrypted, signed chat message (and optional attachment,
+    /// e.g. a WAV voice note). Returns the sent message as JSON.
+    std::string chat_send(const std::string& to, const std::string& text,
+                          const std::string& attachment = "", const std::string& mime = "", int dur_ms = 0) {
+        char* out = nullptr; char* err = nullptr;
+        detail::check(api().chat_send(h_, to.c_str(), text.c_str(), attachment.empty() ? nullptr : attachment.data(),
+                                      static_cast<int>(attachment.size()), mime.c_str(), dur_ms, &out, &err), &err);
+        return detail::take(out);
+    }
+    void chat_allow(const std::string& peer) { contact("allow", peer); }
+    void chat_block(const std::string& peer) { contact("block", peer); }
+    void mark_verified(const std::string& peer) { contact("verified", peer); }
+    void accept_new_key(const std::string& peer) { contact("accept", peer); }
+    /// Pins the key peer must prove (from a magnetk://...?key= address).
+    void expect_key(const std::string& peer, const std::string& fingerprint) { contact("expect", peer + "=" + fingerprint); }
+    /// The 60-digit number both people compare to rule out anyone in the middle.
+    std::string safety_number(const std::string& peer) { return detail::json_str(contact("safety", peer), "safety_number"); }
+    /// {"key","allowed","blocked","verified"}
+    std::string contact_json(const std::string& peer) { return contact("contact", peer); }
+
     /// Nodes serving a file, as JSON ({"hash","name","size","nodes":[...]}).
+    std::string contact(const char* action, const std::string& peer) {
+        char* out = nullptr; char* err = nullptr;
+        detail::check(api().chat_contact(h_, action, peer.c_str(), &out, &err), &err);
+        return out ? detail::take(out) : std::string();
+    }
     std::string providers_json(const std::string& hash) {
         char* err = nullptr;
         char* r = api().find_providers(h_, hash.c_str(), &err);

@@ -231,3 +231,37 @@ def test_info_and_ping(pair):
     assert 0 < a.ping() < 5
     stats = a.relay_stats()
     assert stats["nodes"] >= 2
+
+
+def test_secure_chat(relay, tmp_path):
+    """End-to-end encrypted, signed chat with message requests and safety numbers."""
+    suffix = time.monotonic_ns()
+    alice = magnetk.Node(relays=[relay.address], id="py-alice-%d" % suffix, cache_dir="-",
+                         identity_file=str(tmp_path / "alice.key"), chat_dir=str(tmp_path / "a"))
+    bob = magnetk.Node(relays=[relay.address], id="py-bob-%d" % suffix, cache_dir="-",
+                       identity_file=str(tmp_path / "bob.key"), chat_dir=str(tmp_path / "b"),
+                       chat_require_approval=True)
+    try:
+        ident = alice.identity()
+        assert ident["address"].startswith("magnetk://" + alice.id + "@") and "key=" in ident["address"]
+
+        sent = alice.chat_send(bob.id, "secret plan")
+        assert sent.encrypted
+        m = bob.chat_receive(timeout=5)
+        assert m and m.kind == "text" and m.text == "secret plan" and m.encrypted and m.trusted
+        assert m.request  # bob requires approval: alice is a stranger
+        assert alice.chat_receive(timeout=0.5) is None  # no ack yet
+        bob.chat_allow(alice.id)
+        ack = alice.chat_receive(timeout=5)
+        assert ack and ack.kind == "ack" and ack.text == sent.id
+
+        bob.chat_send(alice.id, "here is a voice note", attachment=b"RIFF" + os.urandom(2000), mime="audio/wav")
+        v = alice.chat_receive(timeout=5)
+        assert v and v.kind == "audio" and v.encrypted and v.attachment_ok and os.path.exists(v.path)
+
+        assert alice.safety_number(bob.id) == bob.safety_number(alice.id) != ""
+        alice.mark_verified(bob.id)
+        assert alice.contact(bob.id)["verified"]
+    finally:
+        alice.close()
+        bob.close()

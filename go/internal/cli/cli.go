@@ -10,11 +10,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/iMarand/magnetk/go/pkg/config"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"github.com/iMarand/magnetk/go/pkg/netx"
 	"github.com/iMarand/magnetk/go/pkg/node"
 	"github.com/iMarand/magnetk/go/pkg/transport"
@@ -40,6 +42,10 @@ func init() {
 		{"sub", "sub [flags] <pattern>", "print messages for a topic pattern (a.b, a.*, a.>)", SubMain},
 		{"req", "req [flags] <node|@topic> <message>", "send a request and print the response", ReqMain},
 		{"serve", "serve [flags] <topic>", "answer requests on a topic (echo service, for testing)", ServeMain},
+		{"chat", "chat [flags] <node|magnetk://...> [message]", "chat with a node: text and voice notes (-audio file.wav); interactive without a message", ChatMain},
+		{"open", "open [-pause] <magnetk://...|magnetk:?...>", "open a magnetk address (chat, relay) or file link (download)", OpenMain},
+		{"id", "id [-relay host:port] [-id name]", "show this device's identity key fingerprint and magnetk:// address", IdMain},
+		{"install", "install [-uninstall] [-n]", "register magnetk:// and magnetk:? links with this desktop (Windows, macOS, Linux)", InstallMain},
 		{"listen", "listen [flags]", "print every direct message and presence event", ListenMain},
 		{"nodes", "nodes [flags] [prefix]", "list connected nodes", NodesMain},
 		{"ping", "ping [flags]", "measure round trips to the relay", PingMain},
@@ -98,6 +104,7 @@ type nodeFlags struct {
 	advertise *string
 	verbose   *bool
 	timeout   *time.Duration
+	identity  *string
 
 	linkRelays *string // share only
 }
@@ -117,6 +124,7 @@ func newNodeFlags(name string) *nodeFlags {
 		advertise: fs.String("advertise", "", "public host:port to advertise for direct connections"),
 		verbose:   fs.Bool("v", false, "verbose logging"),
 		timeout:   fs.Duration("timeout", 15*time.Second, "time to wait for the relay"),
+		identity:  fs.String("identity", "", "identity key file (default IDENTITY_FILE or ~/.magnetk/identity.key; \"off\" = none)"),
 	}
 }
 
@@ -173,6 +181,20 @@ func (f *nodeFlags) nodeConfig(extraRelays []string) (node.Config, error) {
 	if *f.verbose {
 		cfg.Logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
+	keyPath := *f.identity
+	if keyPath == "" {
+		keyPath = file.Str("IDENTITY_FILE", defaultKeyPath())
+	}
+	if keyPath != "off" && keyPath != "-" {
+		k, created, err := identity.LoadOrCreate(expandHome(keyPath))
+		if err != nil {
+			return cfg, fmt.Errorf("identity key %s: %w", keyPath, err)
+		}
+		if created {
+			fmt.Fprintf(os.Stderr, "created identity key %s (fingerprint %s)\n", keyPath, identity.Format(k.Fingerprint()))
+		}
+		cfg.Key = k
+	}
 	if f.linkRelays != nil && *f.linkRelays != "" {
 		cfg.LinkRelays = splitList(*f.linkRelays)
 	}
@@ -195,6 +217,22 @@ func (f *nodeFlags) start(extraRelays []string) (*node.Node, error) {
 		return nil, err
 	}
 	return n, nil
+}
+
+// magnetkHome is ~/.magnetk (keys, known peers, user settings).
+func magnetkHome() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".magnetk")
+}
+
+func defaultKeyPath() string { return filepath.Join(magnetkHome(), "identity.key") }
+
+func expandHome(p string) string {
+	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, p[2:])
+	}
+	return p
 }
 
 func splitList(s string) []string {

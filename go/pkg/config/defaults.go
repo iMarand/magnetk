@@ -18,6 +18,10 @@ const DefaultContent = `# Magnetk settings
 # Token, if your relays require one (see AUTH_TOKENS below).
 # TOKEN=
 
+# Identity key of this device (Ed25519, created on first use). Relays bind
+# your NODE_ID to it, and chat messages are signed with it. "off" disables.
+# IDENTITY_FILE=~/.magnetk/identity.key
+
 # Transport: auto (QUIC, TCP fallback) | quic | tcp
 TRANSPORT=auto
 
@@ -61,6 +65,12 @@ LEGACY_PORT=4003
 # RELAY_ID=relay-eu-1
 # Clients must present one of these tokens (empty = open relay).
 # AUTH_TOKENS=token1,token2
+
+# Node ids are bound to the first identity key that claims them; the
+# bindings are kept in this file ("" = memory only, lost on restart).
+IDENTITIES_FILE=relay-identities.json
+# Reject nodes without an identity key (old clients, v1/JS SDK).
+REQUIRE_IDENTITY=false
 
 # Federation: other relays to link with, and the shared secret.
 # RELAY_PEERS=relay2.example.com:4002

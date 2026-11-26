@@ -125,3 +125,29 @@ build/bin/rpc client 127.0.0.1:4002
 All `Node` methods are thread-safe. The engine runs on Go's scheduler
 inside libmagnetk; limit it with `MAGNETK_MAX_PROCS` (CPU cores) and
 `MAGNETK_MEMORY_LIMIT_MB` (soft heap limit) in the environment.
+
+## Identity and secure chat
+
+```cpp
+magnetk::NodeOptions o;
+o.relays = {"relay.example.com:4002"};
+o.id = "alice";
+o.identity_file = "alice.key";          // created on first use; enables secure chat
+o.chat_dir = "received";
+o.chat_require_approval = true;         // strangers arrive as message requests
+magnetk::Node alice(o);
+
+std::cout << alice.identity_json() << "\n";          // {"fingerprint","formatted","address"}
+alice.chat_send("bob", "hello");                      // end-to-end encrypted + signed
+alice.chat_send("bob", "listen", wav_bytes, "audio/wav");
+while (auto m = alice.receive(1000)) {
+    if (m->is_chat()) std::cout << m->subject << " " << m->data << "\n";   // data = JSON
+}
+std::cout << alice.safety_number("bob") << "\n";      // compare with bob, then:
+alice.mark_verified("bob");
+alice.chat_allow("carol");                            // accept a message request
+```
+
+The chat JSON has `text`, `path` (saved attachment), `encrypted`, `trust`
+(`verified`|`new`|`changed`|`unsigned`|`invalid`), `request`, `fingerprint`,
+`rtt_ms` (acks). Model and limits: [SECURITY.md](../../docs/SECURITY.md).

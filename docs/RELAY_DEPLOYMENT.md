@@ -82,6 +82,12 @@ Check the federation: `curl 127.0.0.1:8090/stats` on each relay shows
 
 ## 5. As a service (systemd)
 
+Quickest: `sudo scripts/install.sh --relay` (or `--seed /srv/files`) installs
+`/opt/magnetk`, writes `/etc/magnetk/settings.conf` and the unit below and
+starts it. On a desktop machine the same script also registers `magnetk://`
+links ([LINKS.md](LINKS.md)). By hand:
+
+
 `/etc/magnetk/settings.conf` (generate with `magnetk config init /etc/magnetk/settings.conf`):
 
 ```ini

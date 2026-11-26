@@ -21,7 +21,7 @@ log = logging.getLogger("magnetk")
 
 Data = Union[bytes, bytearray, memoryview, str]
 
-KIND_NAMES = {1: "direct", 2: "publish", 3: "request", 4: "presence"}
+KIND_NAMES = {1: "direct", 2: "publish", 3: "request", 4: "presence", 5: "chat"}
 
 
 def _ms(timeout: Optional[float]) -> int:
@@ -83,6 +83,56 @@ class Message:
         payload = nat.data_arg(data)
         err = nat.ErrBox()
         err.check(nat.lib.mk_respond(self._node._h, self._request, payload, len(payload), 1 if is_error else 0, err.ref))
+
+
+@dataclass
+class ChatMessage:
+    """A secure chat message (or ack) - see Node.chat_send.
+
+    kind        "text" | "audio" | "ack"
+    sender      node id (authenticated by the relay and by the signature)
+    text        message text (for an ack: the acknowledged message id)
+    path        where a received attachment (voice note) was saved
+    encrypted   True if it was end-to-end encrypted
+    trust       "verified" (pinned key matches) | "new" (first contact, key saved)
+                | "changed" (a different key than before!) | "invalid" | "unsigned"
+    request     True if the sender is not an allowed contact yet (no ack sent):
+                call node.chat_allow(sender) or node.chat_block(sender)
+    """
+
+    kind: str
+    sender: str
+    id: str = ""
+    to: str = ""
+    text: str = ""
+    mime: str = ""
+    dur_ms: int = 0
+    size: int = 0
+    sha256: str = ""
+    path: str = ""
+    attachment_ok: bool = False
+    encrypted: bool = False
+    trust: str = ""
+    fingerprint: str = ""
+    request: bool = False
+    safety_checked: bool = False
+    rtt_ms: float = 0.0
+    error: str = ""
+    raw: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_json(cls, d: Dict[str, Any]) -> "ChatMessage":
+        return cls(kind=d.get("kind", ""), sender=d.get("from", ""), id=d.get("id", ""), to=d.get("to", ""),
+                   text=d.get("text", ""), mime=d.get("mime", ""), dur_ms=d.get("dur_ms", 0), size=d.get("size", 0),
+                   sha256=d.get("sha256", ""), path=d.get("path", ""), attachment_ok=d.get("verified", False),
+                   encrypted=d.get("encrypted", False), trust=d.get("trust", ""), fingerprint=d.get("fingerprint", ""),
+                   request=d.get("request", False), safety_checked=d.get("safety_checked", False),
+                   rtt_ms=d.get("rtt_ms", 0.0), error=d.get("error", ""), raw=d)
+
+    @property
+    def trusted(self) -> bool:
+        """Signed by the key this contact had before (or first contact)."""
+        return self.trust in ("verified", "new") and not self.error
 
 
 class Subscription:
@@ -352,6 +402,8 @@ class Node:
         self._subs: List[Subscription] = []
         self._services: Dict[str, Callable[[Message], Any]] = {}
         self._request_handler: Optional[Callable[[Message], Any]] = None
+        self._chat_handler: Optional[Callable[[ChatMessage], Any]] = None
+        self._chat_inbox: "queue.Queue[ChatMessage]" = queue.Queue()
         self._pipe_handlers: Dict[str, Callable[[Pipe], None]] = {}
         self._inbox: "queue.Queue[Message]" = queue.Queue()
         self._pipe_inbox: "queue.Queue[Pipe]" = queue.Queue()
@@ -482,6 +534,80 @@ class Node:
         with self._lock:
             self._request_handler = handler
 
+    # ---------- identity and secure chat ----------
+
+    def identity(self) -> Dict[str, str]:
+        """This node's identity: {"fingerprint", "formatted", "address"}.
+        The address (magnetk://id@relay?key=...) lets others reach you with
+        proof of who you are. Needs the identity_file option."""
+        out = c_void_p()
+        err = nat.ErrBox()
+        err.check(nat.lib.mk_identity(self._h, byref(out), err.ref))
+        return nat.take_json(out.value) or {}
+
+    def chat_send(self, to: str, text: str = "", *, attachment: Optional[bytes] = None, file: Optional[str] = None,
+                  mime: str = "", dur_ms: int = 0) -> ChatMessage:
+        """Send a chat message, end-to-end encrypted and signed when both
+        sides have identity keys (open the node with identity_file=...).
+        attachment/file: a voice note or any file (up to 12 MiB)."""
+        if file is not None:
+            with open(file, "rb") as f:
+                attachment = f.read()
+            if not mime and file.lower().endswith(".wav"):
+                mime = "audio/wav"
+        data = attachment or b""
+        out = c_void_p()
+        err = nat.ErrBox()
+        err.check(nat.lib.mk_chat_send(self._h, to.encode(), text.encode(), data or None, len(data),
+                                       mime.encode(), int(dur_ms), byref(out), err.ref))
+        return ChatMessage.from_json(nat.take_json(out.value) or {})
+
+    def on_chat(self, handler: Optional[Callable[[ChatMessage], Any]]) -> None:
+        """Call handler for every chat message and ack (otherwise use chat_receive)."""
+        with self._lock:
+            self._chat_handler = handler
+
+    def chat_receive(self, timeout: Optional[float] = None) -> Optional[ChatMessage]:
+        """Next chat message or ack (when no on_chat handler is set)."""
+        try:
+            return self._chat_inbox.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def _contact(self, action: str, peer: str) -> Any:
+        out = c_void_p()
+        err = nat.ErrBox()
+        err.check(nat.lib.mk_chat_contact(self._h, action.encode(), peer.encode(), byref(out), err.ref))
+        return nat.take_json(out.value) if out.value else None
+
+    def chat_allow(self, peer: str) -> None:
+        """Accept a message request from peer (they receive the held acks)."""
+        self._contact("allow", peer)
+
+    def chat_block(self, peer: str) -> None:
+        """Drop everything from peer from now on."""
+        self._contact("block", peer)
+
+    def safety_number(self, peer: str) -> str:
+        """The 60-digit number both people compare to rule out anyone in the middle."""
+        return (self._contact("safety", peer) or {}).get("safety_number", "")
+
+    def mark_verified(self, peer: str) -> None:
+        """Record that the safety number with peer was compared and matched."""
+        self._contact("verified", peer)
+
+    def accept_new_key(self, peer: str) -> None:
+        """Trust peer's new key after a "changed" warning (e.g. a new phone)."""
+        self._contact("accept", peer)
+
+    def expect_key(self, peer: str, fingerprint: str) -> None:
+        """Pin the key peer must prove (e.g. from a magnetk://...?key= address)."""
+        self._contact("expect", "%s=%s" % (peer, fingerprint))
+
+    def contact(self, peer: str) -> Dict[str, Any]:
+        """What is known about peer: key, allowed, blocked, verified."""
+        return self._contact("contact", peer) or {}
+
     def receive(self, timeout: Optional[float] = None) -> Optional[Message]:
         """Next message without a handler (direct, unhandled publications,
         requests, presence). Returns None on timeout."""
@@ -528,6 +654,15 @@ class Node:
                 log.exception("magnetk message handler failed")
 
     def _route(self, m: Message) -> None:
+        if m.kind == "chat":
+            cm = ChatMessage.from_json(json.loads(m.data or b"{}"))
+            with self._lock:
+                handler = self._chat_handler
+            if handler is not None:
+                self._pool.submit(handler, cm)
+            else:
+                self._chat_inbox.put(cm)
+            return
         if m.kind == "request":
             with self._lock:
                 handler = self._services.get(m.subject) if m.subject else self._request_handler

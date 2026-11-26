@@ -52,6 +52,12 @@ type Config struct {
 	// AuthTokens, when non-empty, are the tokens nodes must present.
 	AuthTokens []string
 
+	// IdentitiesFile persists which key owns which node id ("" = memory
+	// only). A node id claimed with a key cannot be used without that key.
+	IdentitiesFile string
+	// RequireIdentity rejects nodes that do not sign their HELLO.
+	RequireIdentity bool
+
 	// Peers are other relays ("host:port") to federate with.
 	Peers []string
 	// ClusterSecret must match on every relay of a federation.

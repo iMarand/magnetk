@@ -114,6 +114,29 @@ int main() {
         CHECK(alice.ping_us() > 0, "ping");
         CHECK(relay.stats_json().find("\"nodes\":2") != std::string::npos, "relay stats");
 
+        // secure chat: identity keys, end-to-end encryption, safety numbers
+        {
+            magnetk::NodeOptions oc = oa;
+            oc.id = "cpp-carol";
+            oc.identity_file = "cpp_carol.key";
+            oc.known_peers_file = "cpp_carol_peers.json";
+            magnetk::NodeOptions od = oc;
+            od.id = "cpp-dave";
+            od.identity_file = "cpp_dave.key";
+            od.known_peers_file = "cpp_dave_peers.json";
+            od.chat_dir = ".";
+            magnetk::Node carol(oc), dave(od);
+            CHECK(carol.identity_json().find("magnetk://cpp-carol@") != std::string::npos, "identity address");
+            std::string sent = carol.chat_send("cpp-dave", "secret from carol");
+            CHECK(sent.find("\"encrypted\":true") != std::string::npos, "chat sent encrypted");
+            auto m = dave.receive(5000);
+            CHECK(m && m->is_chat() && m->data.find("secret from carol") != std::string::npos &&
+                      m->data.find("\"encrypted\":true") != std::string::npos, "chat received and decrypted");
+            CHECK(!carol.safety_number("cpp-dave").empty() && carol.safety_number("cpp-dave") == dave.safety_number("cpp-carol"),
+                  "same safety number");
+        }
+        for (const char* f : {"cpp_carol.key", "cpp_dave.key", "cpp_carol_peers.json", "cpp_dave_peers.json"}) std::remove(f);
+
         // auth
         magnetk::RelayOptions ro;
         ro.tokens = {"s3cret"};

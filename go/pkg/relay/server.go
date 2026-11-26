@@ -31,6 +31,8 @@ type Server struct {
 	wg      sync.WaitGroup
 	started time.Time
 
+	ids *identities
+
 	mu       sync.RWMutex
 	sessions map[string]*session    // nodes attached to this relay
 	routes   map[string]*remoteNode // nodes attached to federated relays
@@ -63,8 +65,13 @@ func New(cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
+	ids, err := openIdentities(cfg.IdentitiesFile)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
+		ids:      ids,
 		cfg:      cfg,
 		log:      logger,
 		ctx:      ctx,
@@ -223,13 +230,14 @@ func (s *Server) housekeeping() {
 // ===== sessions =====
 
 type session struct {
-	srv  *Server
-	id   string
-	conn netx.Conn
-	ctrl netx.Stream
-	w    *wire.QueueWriter
-	info wire.NodeInfo
-	link *link // non-nil for relay links
+	srv   *Server
+	id    string
+	keyFP string // identity key fingerprint ("" = node without a key)
+	conn  netx.Conn
+	ctrl  netx.Stream
+	w     *wire.QueueWriter
+	info  wire.NodeInfo
+	link  *link // non-nil for relay links
 
 	watch   atomic.Bool
 	limiter *tokenBucket
@@ -357,6 +365,13 @@ func (s *Server) handleConn(c netx.Conn) {
 		reject(ctrl, c, wire.ErrCodeBadRequest, "invalid node id (use A-Z a-z 0-9 . _ - : @, max 128)")
 		return
 	}
+	keyFP, why := s.ids.check(hello, id, time.Now(), s.cfg.RequireIdentity)
+	if why != "" {
+		s.st.authFailures.Add(1)
+		s.log.Printf("[relay] rejected %s from %s: %s", id, c.RemoteAddr(), why)
+		reject(ctrl, c, wire.ErrCodeUnauthorized, why)
+		return
+	}
 
 	s.mu.RLock()
 	count := len(s.sessions)
@@ -367,6 +382,7 @@ func (s *Server) handleConn(c netx.Conn) {
 	}
 
 	ss := s.newSession(c, ctrl, id, s.cfg.MaxQueueBytes)
+	ss.keyFP = keyFP
 	ss.info = wire.NodeInfo{NodeID: id, Addrs: limitStrings(hello.Addrs, 16), Observed: c.RemoteAddr(), Meta: hello.Meta, Relay: s.cfg.ID}
 	ss.watch.Store(hello.Flags&wire.HelloWatchPresence != 0)
 
@@ -387,7 +403,7 @@ func (s *Server) handleConn(c netx.Conn) {
 	s.registerSession(ss)
 	ss.w.Start()
 	s.st.connects.Add(1)
-	s.log.Printf("[relay] node %s connected via %s from %s", id, c.Protocol(), c.RemoteAddr())
+	s.log.Printf("[relay] node %s connected via %s from %s (key %s)", id, c.Protocol(), c.RemoteAddr(), orNone(keyFP))
 
 	go s.acceptPipes(ss)
 	go s.datagramLoop(ss)
@@ -583,4 +599,11 @@ func (b *tokenBucket) allow() bool {
 	}
 	b.tokens--
 	return true
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }

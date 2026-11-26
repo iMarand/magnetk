@@ -17,6 +17,7 @@ import (
 
 	"github.com/iMarand/magnetk/go/pkg/files"
 	"github.com/iMarand/magnetk/go/pkg/hrtime"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"github.com/iMarand/magnetk/go/pkg/magnetk"
 	magnetkNAT "github.com/iMarand/magnetk/go/pkg/nat"
 	magnetkNet "github.com/iMarand/magnetk/go/pkg/network"
@@ -47,6 +48,7 @@ type Node struct {
 	subs       map[*Subscription]struct{}
 	services   map[string]func(*Pipe)
 	reqHandler func(*Message) ([]byte, error)
+	sysReq     map[string]func(*Message) ([]byte, error) // payload prefix -> handler
 
 	inbox          chan *Message
 	pipeQ          chan *Pipe
@@ -212,6 +214,9 @@ type Info struct {
 	RTT       time.Duration
 	Direct    []string // advertised direct addresses
 }
+
+// Key returns the node's identity key (nil if it has none).
+func (n *Node) Key() *identity.Key { return n.cfg.Key }
 
 // Info returns the current connection details.
 func (n *Node) Info() Info {
@@ -434,6 +439,10 @@ func (n *Node) dialRelay(ctx context.Context, addr string) (*relayConn, error) {
 	addrs := n.advAddrs
 	n.mu.RUnlock()
 	hello := wire.Hello{Version: wire.Version, NodeID: id, Token: n.cfg.Token, Flags: flags, Meta: n.cfg.Meta, Client: ClientName, Addrs: addrs}
+	if k := n.cfg.Key; k != nil {
+		hello.PubKey, hello.TS = k.Public(), uint64(time.Now().UnixMilli())
+		hello.Sig = k.Sign(identity.HelloPayload(id, hello.TS))
+	}
 	if _, err := ctrl.Write(hello.Encode()); err != nil {
 		c.Close()
 		return nil, err
@@ -449,6 +458,9 @@ func (n *Node) dialRelay(ctx context.Context, addr string) (*relayConn, error) {
 		e, _ := wire.DecodeError(body)
 		c.Close()
 		if e.Code == wire.ErrCodeUnauthorized {
+			if e.Msg != "" && e.Msg != "invalid token" {
+				return nil, fmt.Errorf("%w: %s", ErrUnauthorized, e.Msg)
+			}
 			return nil, ErrUnauthorized
 		}
 		return nil, fmt.Errorf("relay refused: %s", e.Msg)

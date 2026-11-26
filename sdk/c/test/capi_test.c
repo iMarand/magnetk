@@ -193,6 +193,35 @@ int main(void) {
     CHECK(stats && strstr(stats, "\"nodes\":2"), "relay stats");
     mk_free(stats);
 
+    /* secure chat: two nodes with identity keys, end-to-end encrypted */
+    mk_node ca, cb;
+    snprintf(cfg, sizeof cfg, "{\"relays\":[\"127.0.0.1:%d\"],\"id\":\"c-carol\",\"cache_dir\":\"-\",\"identity_file\":\"capi_test_carol.key\"}", port);
+    die_on(mk_node_open(cfg, &ca, &err), err, "open carol");
+    snprintf(cfg, sizeof cfg, "{\"relays\":[\"127.0.0.1:%d\"],\"id\":\"c-dave\",\"cache_dir\":\"-\",\"identity_file\":\"capi_test_dave.key\",\"chat_dir\":\".\"}", port);
+    die_on(mk_node_open(cfg, &cb, &err), err, "open dave");
+    char* ident = NULL;
+    rc = mk_identity(ca, &ident, &err);
+    CHECK(rc == MK_OK && ident && strstr(ident, "magnetk://c-carol@") && strstr(ident, "key="), "identity address");
+    mk_free(ident);
+    char* sent = NULL;
+    rc = mk_chat_send(ca, "c-dave", "secret hello", NULL, 0, NULL, 0, &sent, &err);
+    CHECK(rc == MK_OK && sent && strstr(sent, "\"encrypted\":true"), "chat send encrypted");
+    mk_free(sent);
+    rc = mk_recv(cb, 5000, &m, &err);
+    CHECK(rc == 1 && m->kind == MK_KIND_CHAT && strstr((char*)m->data, "secret hello") && strstr((char*)m->data, "\"encrypted\":true"), "chat received and decrypted");
+    if (rc == 1) mk_message_free(m);
+    rc = mk_recv(ca, 5000, &m, &err);
+    CHECK(rc == 1 && m->kind == MK_KIND_CHAT && strcmp(m->subject, "ack") == 0, "chat ack");
+    if (rc == 1) mk_message_free(m);
+    char* sn1 = NULL; char* sn2 = NULL;
+    mk_chat_contact(ca, "safety", "c-dave", &sn1, &err);
+    mk_chat_contact(cb, "safety", "c-carol", &sn2, &err);
+    CHECK(sn1 && sn2 && strcmp(strstr(sn1, "safety_number"), strstr(sn2, "safety_number")) == 0, "same safety number on both sides");
+    mk_free(sn1); mk_free(sn2);
+    mk_node_close(ca);
+    mk_node_close(cb);
+    remove("capi_test_carol.key"); remove("capi_test_dave.key"); remove("known-peers.json");
+
     mk_node_close(a);
     mk_node_close(b);
     mk_relay_close(relay);

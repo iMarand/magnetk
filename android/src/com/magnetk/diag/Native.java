@@ -29,5 +29,26 @@ final class Native {
 
     static native String status();
 
+    /** Sends a chat text to node "to" ("" = the PC host); returns {"msg":{...}} or {"error":"..."}. */
+    static native String chatSend(String to, String text);
+
+    /** Sends the voice note at path to node "to"; same result as chatSend. */
+    static native String chatSendAudio(String to, String path, String mime, int durMs);
+
+    /** This phone's identity: {"fingerprint":..,"formatted":..}, or null before Connect. */
+    static native String identity();
+
+    /** Pins the key a magnetk:// link promised for node; returns the old fingerprint if it differed. */
+    static native String chatPin(String node, String fingerprint);
+
+    /**
+     * Contact action on peer: "allow", "block", "verified", "accept" (a changed key) or
+     * "safety" (returns the safety number). Returns the safety number, an error, or null.
+     */
+    static native String chatContact(String action, String peer);
+
+    /** Waits up to timeoutMs for chat events; returns a JSON array or null. */
+    static native String chatPoll(int timeoutMs);
+
     static native void close();
 }

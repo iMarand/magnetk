@@ -167,3 +167,41 @@ for the heartbeat.
 | `relay` | embedded relay, federation |
 
 Tests: `go test ./...` in `sdk/go`.
+
+## Identity and secure chat
+
+Give the node an identity key: relays bind its id to the key, and chat
+becomes end-to-end encrypted and signed ([security model](../../docs/SECURITY.md)).
+
+```go
+key, err := magnetk.LoadOrCreateKey("alice.key")  // created on first use; keep it private
+n, err := magnetk.ConnectConfig(ctx, magnetk.Config{Relays: relays, ID: "alice", Key: key})
+
+sc := magnetk.NewSecureChat(n, "received", "alice-peers.json",
+    magnetk.ChatPolicy{RequireApproval: true}, // strangers arrive as message requests
+    func(m magnetk.ChatMessage) {
+        switch {
+        case m.Kind == "ack":
+            fmt.Printf("delivered in %.1f ms\n", m.RTTMs)
+        case m.Request:
+            fmt.Println("message request from", m.From) // sc.Allow(m.From) or sc.Block(m.From)
+        default:
+            fmt.Println(m.From, m.Text, m.Encrypted, m.Trust, m.Path)
+        }
+    })
+go func() { for m := range n.Messages() { sc.HandleMessage(m) } }()
+
+sc.Send(ctx, "bob", "hello", "", 0, nil)                     // text
+sc.Send(ctx, "bob", "listen", "audio/wav", 0, wavBytes)       // voice note / any attachment
+fmt.Println(sc.SafetyNumber("bob"))                           // compare with bob once, then:
+sc.MarkVerified("bob")
+
+addr := magnetk.Address{Node: n.ID(), Relays: []string{n.Info().Relay}, Key: key.Fingerprint()}
+fmt.Println(addr.String()) // magnetk://alice@relay:4002?key=... - share it
+```
+
+`m.Trust` is `verified`, `new` (first contact, key saved), `changed` (a
+different key than before: shown as a request, never accepted silently),
+`unsigned` (old software) or `invalid`. `ErrKeyChanged` is returned when
+sending to a contact whose key changed: compare the safety number, then
+`sc.AcceptKey(peer)`. Full example: [`examples/securechat`](examples/securechat/main.go).

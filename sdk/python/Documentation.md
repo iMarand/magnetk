@@ -194,3 +194,34 @@ in native code. Each `Node` uses one dispatcher thread plus `workers`
 handler threads; the engine itself runs on Go's scheduler (`MAX_PROCS` /
 `MAGNETK_MAX_PROCS` limits CPU cores, `MAGNETK_MEMORY_LIMIT_MB` the heap).
 Always `close()` nodes (or use `with`) so the relay sees a clean leave.
+
+## Identity and secure chat
+
+```python
+import magnetk
+
+alice = magnetk.Node("relay.example.com:4002", id="alice",
+                     identity_file="~/.magnetk/alice.key",   # created on first use; keep it private
+                     chat_dir="received",                     # where voice notes / files are saved
+                     chat_require_approval=True)              # strangers arrive as message requests
+print(alice.identity()["address"])     # magnetk://alice@relay.example.com:4002?key=... - share it
+
+def on_chat(m: magnetk.ChatMessage):
+    if m.kind == "ack":
+        print("delivered in %.1f ms" % m.rtt_ms)
+    elif m.request:
+        print("message request from", m.sender)    # alice.chat_allow(m.sender) / alice.chat_block(m.sender)
+    else:
+        print(m.sender, m.text, m.encrypted, m.trust, m.path)
+
+alice.on_chat(on_chat)                     # or: m = alice.chat_receive(timeout=5)
+alice.chat_send("bob", "hello")            # end-to-end encrypted and signed
+alice.chat_send("bob", "listen", file="note.wav")
+print(alice.safety_number("bob"))          # compare with bob once, then:
+alice.mark_verified("bob")
+```
+
+`trust` is `verified`, `new` (first contact), `changed` (a different key:
+held as a request; `accept_new_key(peer)` after checking), `unsigned` (old
+software) or `invalid`. Other helpers: `expect_key(peer, fingerprint)` (from a
+`key=` address) and `contact(peer)`. Model and limits: [SECURITY.md](../../docs/SECURITY.md).

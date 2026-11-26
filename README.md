@@ -60,6 +60,7 @@ Users pay with VISA or crypto. Crypto conversion happens invisibly in the backgr
 * **Files**: content-addressed sharing, parallel multi-source downloads, every chunk verified, resumable, self-contained links.
 * **Transports**: QUIC (MsQuic, TLS 1.3, datagrams) with an automatic TCP + TLS 1.3 fallback on the same port.
 * **SDKs**: Go, Python, C++, C (and the v1 JavaScript SDK through the relay's legacy port), an Android field-test app, and the `magnetk` CLI.
+* **Secure identities and chat**: every device has an identity key. Relays bind node ids to keys, so nobody can use yours. Chat and voice notes are **end-to-end encrypted** and signed. Strangers arrive as message requests, and contacts can be verified with a safety number. `magnetk://node@relay?key=...` addresses carry proof of who answers ([security model](docs/SECURITY.md)).
 * **Configurable**: one documented `settings.conf` (+ `MAGNETK_*` environment variables) for transport, routing, buffers, limits, CPU cores and memory.
 
 ```bash
@@ -69,9 +70,13 @@ magnetk pub -relay vps:4002 chat.general hello  # terminal 2
 magnetk share -relay vps:4002 big.iso           # prints a magnetk link
 magnetk get "magnetk:?xt=urn:sha256:..."        # anywhere
 magnetk bench -local all                        # measure on this machine
+magnetk chat -relay vps:4002 a52-3cc9 "hi"       # chat (text, -audio voice notes) with any node
+magnetk open "magnetk://a52-3cc9@vps:4002/chat" # what clicking a magnetk:// link runs
 ```
 
-Docs: [Architecture & protocol](docs/ARCHITECTURE.md) · [Running relays (1 or 2 VPS)](docs/RELAY_DEPLOYMENT.md) · [Field testing on phones](docs/FIELD_TEST.md) · [Benchmarks](docs/BENCHMARKS.md) · [Configuration](config/settings.conf)
+Install (binary on PATH + `magnetk://` links): `scripts/install.sh` · Windows `scripts\install.ps1` · server `sudo scripts/install.sh --relay`.
+
+Docs: [Architecture & protocol](docs/ARCHITECTURE.md) · [Running relays (1 or 2 VPS)](docs/RELAY_DEPLOYMENT.md) · [Field testing on phones](docs/FIELD_TEST.md) · [magnetk:// links and chat](docs/LINKS.md) · [Security](docs/SECURITY.md) · [Benchmarks](docs/BENCHMARKS.md) · [Configuration](config/settings.conf)
 
 ---
 

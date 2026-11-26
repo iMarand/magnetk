@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -126,5 +127,51 @@ func TestSDK(t *testing.T) {
 func TestConnectNoRelays(t *testing.T) {
 	if _, err := magnetk.Connect(context.Background()); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestSecureChat(t *testing.T) {
+	r, err := magnetk.StartRelay(magnetk.RelayConfig{Listen: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	addr := fmt.Sprintf("127.0.0.1:%d", r.Port())
+	ctx := context.Background()
+	open := func(id string) (*magnetk.Node, *magnetk.SecureChat, chan magnetk.ChatMessage) {
+		key, err := magnetk.LoadOrCreateKey(filepath.Join(t.TempDir(), id+".key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := magnetk.ConnectConfig(ctx, magnetk.Config{Relays: []string{addr}, ID: id, Key: key, CacheDir: "-"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make(chan magnetk.ChatMessage, 8)
+		sc := magnetk.NewSecureChat(n, t.TempDir(), "", magnetk.ChatPolicy{}, func(m magnetk.ChatMessage) { got <- m })
+		go func() {
+			for m := range n.Messages() {
+				sc.HandleMessage(m)
+			}
+		}()
+		return n, sc, got
+	}
+	a, sa, _ := open("go-alice")
+	defer a.Close()
+	b, sb, gotB := open("go-bob")
+	defer b.Close()
+	if _, err := sa.Send(ctx, "go-bob", "hello bob", "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-gotB:
+		if m.Text != "hello bob" || !m.Encrypted {
+			t.Fatalf("got %+v", m)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no message")
+	}
+	if sa.SafetyNumber("go-bob") != sb.SafetyNumber("go-alice") {
+		t.Fatal("safety numbers differ")
 	}
 }

@@ -146,3 +146,31 @@ magnetk diag client -relay ... -wait                        # wait for host comm
 * On Windows, Go's `time.Now()` only advances every ~0.5 ms; Magnetk
   measures latency with `QueryPerformanceCounter` (`pkg/hrtime`), so
   sub-millisecond numbers are real.
+
+## Chat and voice notes
+
+Chat is end-to-end encrypted (the PC host, `magnetk chat` and the phone
+exchange keys automatically). Each bubble shows encrypted or NOT encrypted
+and who signed it ("verified", "new key ... saved", or a red KEY CHANGED or
+INVALID SIGNATURE). Messages from strangers (anyone except the PC host and
+people you wrote to) arrive as message requests with **Allow** and **Block**.
+**Verify** shows the safety number to compare with the other person. See
+[SECURITY.md](SECURITY.md).
+
+The app's **Chat** tab sends text and voice notes (**Rec** / **Stop**) over
+the same Magnetk connection. Each message shows "✓ PC got it · N ms" when
+the receiver acknowledged it. Received voice notes show "sha256 ✓" and play
+on tap. Quiet recordings are boosted automatically.
+
+On the PC, the diag host prints chat lines (`CHAT <- a52-3cc9: hi`) and saves
+voice notes to `diag-data/chat/`. Reply over Magnetk with
+`magnetk chat -relay 127.0.0.1:4002 -token <token> <phone id> "text"`, or
+`-audio file.wav` for a voice note (see [LINKS.md](LINKS.md)). The phone
+replies to whoever wrote last; **To PC** switches back. **My address** shares
+the phone's `magnetk://<id>@<relay>` address, and opening a `magnetk://` link
+on the phone opens the chat with that node.
+
+**Wi-Fi boost** (on by default) holds a low-latency Wi-Fi lock while the app is
+open, which removes most power-saving latency spikes. **Wi-Fi info** logs
+the band, link speed and signal so results can be explained.
+

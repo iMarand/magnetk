@@ -81,6 +81,9 @@ type hostHello struct {
 	RelayToken bool     `json:"relay_token"`          // embedded relay requires a token
 	Direct     []string `json:"direct,omitempty"`
 	QUIC       bool     `json:"quic"`
+	Key        string   `json:"key,omitempty"`   // host identity fingerprint
+	HTTPS      string   `json:"https,omitempty"` // ":port" of the HTTPS comparison server
+	HTTPSCert  string   `json:"https_cert,omitempty"`
 }
 
 type bulkResult struct {

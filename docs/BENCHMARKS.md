@@ -57,3 +57,29 @@ Wi-Fi / mobile throughput instead. Network switch measured by the app:
 Wi-Fi → cellular reconnected in **163 ms**, cellular → Wi-Fi in **81 ms**,
 no monitor pings lost. Real-device numbers: run the app and see
 `diag-data/logs/`.
+
+## Magnetk vs HTTPS (same machine, same network)
+
+The diag host also serves the same workloads over HTTPS (TLS 1.3, HTTP/2,
+pinned self-signed certificate), and the `compare` test (the app's
+**vs HTTPS** button, part of **Run all**) measures both back to back. Each
+transfer runs twice, alternating which side goes first, and the best run of
+each is kept. All data is verified with SHA-256 on both sides.
+
+PC to its own LAN address (TCP, 16 MiB transfers, 2026-11-26):
+
+| | Magnetk | HTTPS (HTTP/2) | Faster |
+|---|---|---|---|
+| cold connect (TCP+TLS+handshake+first answer) | 6.1 ms | 3.8 ms | HTTPS |
+| request 64 B, p50 | 0.79 ms | 0.41 ms | HTTPS |
+| request 64 B, p90 | 1.42 ms | 0.66 ms | HTTPS |
+| 16 concurrent clients | 9,742 req/s | 4,803 req/s | Magnetk (2x) |
+| download | 93.8 MB/s | 68.4 MB/s | Magnetk |
+| upload | 114.6 MB/s | 111.2 MB/s | Magnetk |
+
+Why: Magnetk adds one round trip to connect (the signed HELLO) and routes
+requests through the relay (node → relay → node), so a single small request
+pays an extra hop. Under load, its multiplexed binary frames and pipelined
+requests beat HTTP/2's per-request headers. Bulk transfers are similar
+because both are limited by TCP. On Wi-Fi or mobile networks the radio
+dominates, so run the comparison from the phone to see the real difference.

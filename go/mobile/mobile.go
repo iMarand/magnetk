@@ -24,7 +24,9 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/iMarand/magnetk/go/pkg/chat"
 	"github.com/iMarand/magnetk/go/pkg/diag"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"github.com/iMarand/magnetk/go/pkg/netx"
 )
 
@@ -49,6 +51,7 @@ var (
 	mu      sync.Mutex
 	client  *diag.Client
 	lines   = make(chan string, 20000)
+	chats   = make(chan chat.Msg, 1000)
 	network = "unknown"
 )
 
@@ -116,7 +119,7 @@ func mkdStart(cfgJSON *C.char) *C.char {
 	c, err := diag.NewClient(diag.ClientConfig{
 		ID: cfg.ID, Relays: cfg.Relays, HostID: cfg.Host, Token: cfg.Token,
 		Transport: netx.ParseMode(cfg.Transport), Device: cfg.Device, DataDir: cfg.DataDir,
-		PipeMB: cfg.PipeMB, OnLog: onLog,
+		PipeMB: cfg.PipeMB, OnLog: onLog, OnChat: onChat,
 	})
 	if err != nil {
 		return cstr(err.Error())
@@ -222,6 +225,134 @@ func mkdStatus() *C.char {
 		return cstr("not started")
 	}
 	return cstr(c.ID() + " · " + c.Status())
+}
+
+func onChat(m chat.Msg) {
+	select {
+	case chats <- m:
+	default:
+	}
+}
+
+func chatResult(m chat.Msg, err error) *C.char {
+	if err != nil {
+		return cstr(string(mustJSON(map[string]string{"error": err.Error()})))
+	}
+	return cstr(string(mustJSON(map[string]any{"msg": m})))
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+// mkdChatSend sends a text to node "to" ("" = the PC host): {"msg":{...}} or {"error":"..."}.
+//
+//export mkdChatSend
+func mkdChatSend(to, text *C.char) *C.char {
+	c := current()
+	if c == nil {
+		return chatResult(chat.Msg{}, fmt.Errorf("not connected: press Connect first"))
+	}
+	return chatResult(c.ChatText(C.GoString(to), C.GoString(text)))
+}
+
+// mkdChatSendAudio sends the voice note stored at path.
+//
+//export mkdChatSendAudio
+func mkdChatSendAudio(to, path, mime *C.char, durMs C.int) *C.char {
+	c := current()
+	if c == nil {
+		return chatResult(chat.Msg{}, fmt.Errorf("not connected: press Connect first"))
+	}
+	data, err := os.ReadFile(C.GoString(path))
+	if err != nil {
+		return chatResult(chat.Msg{}, err)
+	}
+	return chatResult(c.ChatAudio(C.GoString(to), data, C.GoString(mime), int(durMs), ""))
+}
+
+// mkdChatPoll waits up to timeoutMs for chat events; returns a JSON array or NULL.
+//
+//export mkdChatPoll
+func mkdChatPoll(timeoutMs C.int) *C.char {
+	var batch []chat.Msg
+	select {
+	case m := <-chats:
+		batch = append(batch, m)
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+		return nil
+	}
+	for len(batch) < 100 {
+		select {
+		case m := <-chats:
+			batch = append(batch, m)
+			continue
+		default:
+		}
+		break
+	}
+	return cstr(string(mustJSON(batch)))
+}
+
+// mkdIdentity returns {"fingerprint":"...","formatted":"..."} or NULL before Connect.
+//
+//export mkdIdentity
+func mkdIdentity() *C.char {
+	c := current()
+	if c == nil {
+		return nil
+	}
+	fp := c.Fingerprint()
+	return cstr(string(mustJSON(map[string]string{"fingerprint": fp, "formatted": identity.Format(fp)})))
+}
+
+// mkdChatPin pins the key a magnetk://...?key= link promised for node; it
+// returns the previously pinned fingerprint if it differed, else NULL.
+//
+//export mkdChatPin
+func mkdChatPin(node, fp *C.char) *C.char {
+	c := current()
+	if c == nil {
+		return nil
+	}
+	if prev := c.PinPeer(C.GoString(node), C.GoString(fp)); prev != "" {
+		return cstr(prev)
+	}
+	return nil
+}
+
+// mkdChatContact runs a contact action on peer: allow, block, verified,
+// accept (a changed key) or safety (returns the safety number). It returns
+// the safety number for "safety", an error message, or NULL.
+//
+//export mkdChatContact
+func mkdChatContact(action, peer *C.char) *C.char {
+	c := current()
+	if c == nil {
+		return cstr("not connected")
+	}
+	p := C.GoString(peer)
+	switch C.GoString(action) {
+	case "allow":
+		c.ChatAllow(p)
+	case "block":
+		c.ChatBlock(p)
+	case "verified":
+		c.ChatMarkVerified(p)
+	case "accept":
+		if err := c.ChatAcceptKey(p); err != nil {
+			return cstr(err.Error())
+		}
+	case "safety":
+		if n := c.ChatSafetyNumber(p); n != "" {
+			return cstr(n)
+		}
+		return nil
+	default:
+		return cstr("unknown action")
+	}
+	return nil
 }
 
 //export mkdClose

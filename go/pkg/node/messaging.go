@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,6 +127,14 @@ func (n *Node) deliver(d wire.Deliver, datagram bool) {
 		}
 		n.mu.RLock()
 		h := n.reqHandler
+		if m.Subject == "" {
+			for prefix, sh := range n.sysReq {
+				if strings.HasPrefix(string(m.Data[:min(len(m.Data), len(prefix))]), prefix) {
+					h = sh
+					break
+				}
+			}
+		}
 		n.mu.RUnlock()
 		if h != nil && m.Subject == "" {
 			go runHandler(h, m)
@@ -199,6 +208,18 @@ func (n *Node) Messages() <-chan *Message { return n.inbox }
 func (n *Node) OnRequest(h func(*Message) ([]byte, error)) {
 	n.mu.Lock()
 	n.reqHandler = h
+	n.mu.Unlock()
+}
+
+// HandleSystemRequests answers direct requests whose payload starts with
+// prefix inside the engine (before OnRequest and the inbox), e.g. the chat
+// key exchange. Apps normally do not need it.
+func (n *Node) HandleSystemRequests(prefix string, h func(*Message) ([]byte, error)) {
+	n.mu.Lock()
+	if n.sysReq == nil {
+		n.sysReq = map[string]func(*Message) ([]byte, error){}
+	}
+	n.sysReq[prefix] = h
 	n.mu.Unlock()
 }
 

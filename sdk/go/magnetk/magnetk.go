@@ -15,6 +15,15 @@
 //	})
 //	n.Publish(ctx, "chat.general", []byte("hello"))
 //
+// Secure, end-to-end encrypted chat between identities:
+//
+//	key, _ := magnetk.LoadOrCreateKey("alice.key")
+//	n, _ := magnetk.ConnectConfig(ctx, magnetk.Config{Relays: relays, ID: "alice", Key: key})
+//	sc := magnetk.NewSecureChat(n, "downloads", "known-peers.json", magnetk.ChatPolicy{RequireApproval: true},
+//	    func(m magnetk.ChatMessage) { fmt.Println(m.From, m.Text, m.Encrypted, m.Trust) })
+//	go func() { for m := range n.Messages() { sc.HandleMessage(m) } }()
+//	sc.Send(ctx, "bob", "hi bob", "", 0, nil)
+//
 // Every type is an alias of the engine type, so values can be passed to the
 // engine packages directly when lower-level control is needed.
 package magnetk
@@ -24,8 +33,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/iMarand/magnetk/go/pkg/chat"
 	"github.com/iMarand/magnetk/go/pkg/config"
 	"github.com/iMarand/magnetk/go/pkg/files"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	link "github.com/iMarand/magnetk/go/pkg/magnetk"
 	"github.com/iMarand/magnetk/go/pkg/netx"
 	"github.com/iMarand/magnetk/go/pkg/node"
@@ -269,4 +280,86 @@ func RelayConfigFromSettings(path string) (RelayConfig, error) {
 // WithTimeout is a convenience for context.WithTimeout(context.Background(), d).
 func WithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
+}
+
+// ===== identity and secure chat =====
+
+type (
+	// Key is a device's Ed25519 identity key (with its X25519 encryption key).
+	Key = identity.Key
+	// Contact is what a node knows about a peer: pinned key, allowed, blocked, verified.
+	Contact = identity.Contact
+	// Trust is the result of checking a signature against the pinned key.
+	Trust = identity.Trust
+	// Pins stores pinned keys and contact decisions (known-peers.json).
+	Pins = identity.Pins
+	// ChatMessage is a secure chat message or ack.
+	ChatMessage = chat.Msg
+	// ChatPolicy controls message requests and required encryption.
+	ChatPolicy = chat.Policy
+	// Address is a parsed magnetk://node@relay[/action]?key=... address.
+	Address = link.Address
+)
+
+const (
+	TrustVerified = identity.TrustVerified
+	TrustNew      = identity.TrustNew
+	TrustChanged  = identity.TrustChanged
+	TrustUnsigned = identity.TrustUnsigned
+	TrustInvalid  = identity.TrustInvalid
+)
+
+var (
+	ErrKeyChanged   = chat.ErrKeyChanged
+	ErrNotEncrypted = chat.ErrNotEncrypted
+)
+
+// LoadOrCreateKey loads the identity key at path, creating it on first use.
+// Put it in Config.Key: relays then bind Config.ID to this key.
+func LoadOrCreateKey(path string) (*Key, error) {
+	k, _, err := identity.LoadOrCreate(path)
+	return k, err
+}
+
+// OpenPins opens a known-peers file ("" = memory only).
+func OpenPins(path string) *Pins { return identity.OpenPins(path) }
+
+// ParseAddress parses a magnetk:// address.
+func ParseAddress(s string) (*Address, error) { return link.ParseAddress(s) }
+
+// SafetyNumber is the 60-digit number two people compare to rule out anyone
+// in the middle (the same on both sides).
+func SafetyNumber(fingerprintA, fingerprintB string) string {
+	return identity.SafetyNumber(fingerprintA, fingerprintB)
+}
+
+// SecureChat is end-to-end encrypted, signed chat on a node (text and
+// attachments such as voice notes), with message requests, blocking and
+// safety-number verification. See docs/SECURITY.md.
+type SecureChat struct {
+	*chat.Box
+	n *Node
+}
+
+// NewSecureChat attaches secure chat to n (which should have Config.Key).
+// Received attachments are saved in dir, contacts in pinsFile. Feed every
+// message from n.Messages() to HandleMessage; chat messages and acks are
+// passed to on.
+func NewSecureChat(n *Node, dir, pinsFile string, policy ChatPolicy, on func(ChatMessage)) *SecureChat {
+	box := chat.NewBox(n.ID(), dir, func() *node.Node { return n }, on)
+	if k := n.Key(); k != nil {
+		box.SetIdentity(k, identity.OpenPins(pinsFile))
+		box.Attach(n)
+	}
+	box.SetPolicy(policy)
+	return &SecureChat{Box: box, n: n}
+}
+
+// HandleMessage processes m if it is a chat message and reports whether it was.
+func (s *SecureChat) HandleMessage(m *Message) bool {
+	if m.Kind != node.KindDirect || !chat.IsChat(m.Data) {
+		return false
+	}
+	s.Box.Handle(m.From, m.Data)
+	return true
 }

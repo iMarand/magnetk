@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iMarand/magnetk/go/pkg/diag"
+	"github.com/iMarand/magnetk/go/pkg/identity"
 	"github.com/iMarand/magnetk/go/pkg/netx"
 )
 
@@ -44,6 +45,7 @@ func diagHost(args []string) error {
 	fileMB := fs.Int("file-mb", 32, "size of the shared test file in MiB (0 = none)")
 	dir := fs.String("dir", "diag-data", "directory for logs and the test file")
 	httpAddr := fs.String("http", "127.0.0.1:8090", "HTTP API address (\"-\" = off)")
+	httpsAddr := fs.String("https", "0.0.0.0:4443", "HTTPS server for the Magnetk-vs-HTTPS comparison (\"-\" = off)")
 	verbose := fs.Bool("v", false, "print engine logs")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -51,7 +53,7 @@ func diagHost(args []string) error {
 	cfg := diag.HostConfig{
 		ID: *id, RelayListen: *listen, Relays: splitList(*relays), ClusterSecret: *secret, Token: *token,
 		Transport: netx.ParseMode(*transport), DirectListen: *direct, Advertise: splitList(*advertise),
-		FileSize: int64(*fileMB) << 20, DataDir: *dir, HTTP: *httpAddr,
+		FileSize: int64(*fileMB) << 20, DataDir: *dir, HTTP: *httpAddr, HTTPS: *httpsAddr,
 	}
 	if *fileMB == 0 {
 		cfg.FileSize = -1
@@ -82,6 +84,7 @@ func diagHost(args []string) error {
 	if *token != "" {
 		fmt.Printf("  token required: %s\n", *token)
 	}
+	fmt.Printf("  identity key: %s (clients pin it; it must not change)\n", identity.Format(h.Fingerprint()))
 	if *httpAddr != "-" {
 		fmt.Printf("  HTTP API: http://%s/{clients,logs,results,status,cmd?client=all&op=run&tests=all}\n", *httpAddr)
 	}

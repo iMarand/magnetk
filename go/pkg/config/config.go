@@ -261,6 +261,8 @@ func (f *File) Relay() relay.Config {
 		CertHash:          f.Str("TLS_CERT_HASH", ""),
 		QUIC:              f.QUIC(),
 		AuthTokens:        f.List("AUTH_TOKENS"),
+		IdentitiesFile:    f.Str("IDENTITIES_FILE", ""),
+		RequireIdentity:   f.Bool("REQUIRE_IDENTITY", false),
 		Peers:             f.List("RELAY_PEERS"),
 		ClusterSecret:     f.Str("CLUSTER_SECRET", ""),
 		MaxFrame:          int(f.Size("MAX_MESSAGE_SIZE", 16<<20)),

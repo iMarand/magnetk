@@ -16,7 +16,7 @@ func TestHostClientSuite(t *testing.T) {
 	defer cancel()
 	h, err := StartHost(ctx, HostConfig{
 		RelayListen: "127.0.0.1:0", DirectListen: "127.0.0.1:0", HTTP: "-",
-		Token: "tok", FileSize: 2 << 20, DataDir: dir, Out: io.Discard,
+		Token: "tok", FileSize: 2 << 20, DataDir: dir, Out: io.Discard, HTTPS: "127.0.0.1:0",
 	})
 	if err != nil {
 		t.Fatal(err)
